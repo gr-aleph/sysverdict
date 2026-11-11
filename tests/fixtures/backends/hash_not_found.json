@@ -1,0 +1,32 @@
+{
+  "status_code": 200,
+  "body": {
+    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash_type": "sha256",
+    "sources": {
+      "virustotal": {
+        "status": "not_found",
+        "data": null,
+        "error": null
+      },
+      "malwarebazaar": {
+        "status": "not_found",
+        "data": null,
+        "error": null
+      },
+      "threatfox": {
+        "status": "not_found",
+        "data": null,
+        "error": null
+      }
+    },
+    "verdict": {
+      "score": 50,
+      "label": "suspicious",
+      "reasons": [
+        "No source knows this hash. Not being known is not proof it is safe, so it needs checking."
+      ],
+      "failed_sources": []
+    }
+  }
+}

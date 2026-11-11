@@ -1,0 +1,30 @@
+"""Optional check against real lab logs in samples/ (git-ignored, so this is skipped on GitHub).
+
+Expected results:
+  attack_fake_fireeye.evtx      -> Malicious (fake FireEye installer: Run key, recon, lookalike domain)
+  attack_leaked_video.evtx      -> Malicious (WordPad drops leaked_video.mp4.exe, service, ransom note)
+  benign_before_infection.evtx  -> Benign   (the same computer before the infection: no findings)
+"""
+
+from pathlib import Path
+
+import pytest
+
+from triage.checks import make_verdict, run_checks
+from triage.parse import read_evtx
+
+SAMPLES = Path(__file__).parent.parent / "samples"
+EXPECTED = {"attack_fake_fireeye.evtx": "Malicious",
+            "attack_leaked_video.evtx": "Malicious",
+            "benign_before_infection.evtx": "Benign"}
+
+
+@pytest.mark.parametrize("name, label", EXPECTED.items())
+def test_real_sample_verdict(name, label):
+    path = SAMPLES / name
+    if not path.exists():
+        pytest.skip(f"{name} is not on this computer (real logs are never committed)")
+    findings = run_checks(read_evtx(path))
+    assert make_verdict(findings)["label"] == label
+    if label == "Benign":
+        assert findings == []

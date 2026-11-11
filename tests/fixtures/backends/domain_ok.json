@@ -1,0 +1,20 @@
+{
+  "status_code": 200,
+  "body": {
+    "ioc": {"type": "domain", "input": "Example.com", "value": "example.com"},
+    "sources": {
+      "dns": {"status": "ok", "data": {"resolver": "dns.google", "rcode": "NOERROR",
+              "A": [{"value": "104.20.23.154", "ttl": 300}], "AAAA": [], "NS": [], "MX": [], "TXT": []},
+              "score": 40, "score_reason": "resolves to an address (-10)"},
+      "rdap": {"status": "ok", "data": {"registrar": "...", "registered": "1995-08-14T04:00:00Z", "expires": "...",
+               "last_changed": "...", "statuses": ["..."], "nameservers": ["..."], "registry_url": "..."},
+               "score": 10, "score_reason": "registered 5 years or more ago (-40)"},
+      "crtsh": {"status": "error", "data": null,
+                "error": {"code": "upstream_error", "message": "crt.sh returned HTTP 502"},
+                "score": null, "score_reason": "no score: the source could not be reached, so it is left out of the average"}
+    },
+    "assessment": {"score_min": 0, "score_max": 100, "average": 25, "sources_used": 2, "sources_total": 3,
+                   "verdict": "likely_safe", "verdict_label": "Likely safe",
+                   "verdict_note": "only 2 of 3 sources gave a score, so the verdict cannot be 'definitely'"}
+  }
+}

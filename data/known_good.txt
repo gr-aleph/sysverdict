@@ -1,0 +1,11 @@
+# Paths (lowercase fragments) of normal programs that live in user-writable folders.
+# A program whose path contains one of these is NOT treated as "running from a user folder".
+# Keep this list short: every entry is a place malware could hide.
+\appdata\local\microsoft\onedrive\
+\appdata\local\microsoft\windowsapps\
+\appdata\local\microsoft\teams\
+\appdata\local\microsoft\edge\
+\appdata\local\programs\microsoft vs code\
+\programdata\microsoft\windows defender\
+\programdata\microsoft\windows defender advanced threat protection\
+\programdata\package cache\
