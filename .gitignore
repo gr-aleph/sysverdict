@@ -1,0 +1,27 @@
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+
+# Real logs contain usernames, hostnames and SIDs: never commit
+*.evtx
+*.evtx.*
+samples/
+
+# Reports made from real logs
+*.pdf
+iocs.csv
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local tools
+.claude/settings.local.json
+
+# Local notes, never commit (they stay on this PC only)
+CLAUDE.md
+PROGRESS.md
