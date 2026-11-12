@@ -3,7 +3,9 @@
 Expected results:
   attack_fake_fireeye.evtx      -> Malicious (fake FireEye installer: Run key, recon, lookalike domain)
   attack_leaked_video.evtx      -> Malicious (WordPad drops leaked_video.mp4.exe, service, ransom note)
-  benign_before_infection.evtx  -> Benign   (the same computer before the infection: no findings)
+  benign_before_infection.evtx  -> Suspicious (the same computer before the infection. Since
+      Milestone 5 the policy is "unsure = Suspicious": its two new Run key entries and a script
+      program going online are Low findings worth a look; nothing is High.)
 """
 
 from pathlib import Path
@@ -16,7 +18,7 @@ from triage.parse import read_evtx
 SAMPLES = Path(__file__).parent.parent / "samples"
 EXPECTED = {"attack_fake_fireeye.evtx": "Malicious",
             "attack_leaked_video.evtx": "Malicious",
-            "benign_before_infection.evtx": "Benign"}
+            "benign_before_infection.evtx": "Suspicious"}
 
 
 @pytest.mark.parametrize("name, label", EXPECTED.items())

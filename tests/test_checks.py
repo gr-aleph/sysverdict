@@ -228,10 +228,12 @@ def powershell_strengths(command, parent=USER + "\\Downloads\\invoice_viewer.exe
 
 
 def test_hidden_or_encoded_powershell_alone_is_not_suspicious():
+    # Agents use these options all day; on their own they would bury the real signals.
     assert powershell_strengths("powershell.exe -NoProfile -WindowStyle Hidden -File "
                                 "C:\\Program Files\\Agent\\inventory.ps1") == []
     # A monitoring agent's encoded command that only reads a counter.
     assert powershell_strengths(encoded("Get-Counter '\\Processor(_Total)\\% Processor Time'")) == []
+    assert powershell_strengths("powershell -ep bypass -File C:\\Scripts\\a.ps1") == []
 
 
 def test_powershell_download_and_run_is_strong():

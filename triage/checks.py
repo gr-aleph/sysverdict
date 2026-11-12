@@ -108,7 +108,9 @@ OFFICIAL_INSTALLERS = re.compile(r"community\.chocolatey\.org/install\.ps1|get\.
 PS_RUN_TEXT = re.compile(r"\biex\b|invoke-expression")
 # Turning base64 text back into code inside the script.
 PS_DECODE = re.compile(r"frombase64string")
-# A hidden window alone is not a sign: management agents and scheduled scripts use it too.
+# A hidden window, -ExecutionPolicy Bypass or an encoded command alone is not a finding:
+# management agents (Intune, RMM, monitoring) use them all day (measured: up to 30 times in one
+# normal log), so they would bury the real signals.
 
 # A file name with a fake document ending before a program ending, e.g. "invoice.pdf.exe".
 # Part 1 is the fake ending (docx? = doc or docx, jpe?g = jpg or jpeg); part 2 is the real
@@ -147,6 +149,20 @@ def in_user_folder(path):
     """True for programs in Downloads, Temp, AppData, ... unless on the known-good list."""
     path = (path or "").lower()
     return any(marker in path for marker in USER_FOLDER_MARKERS) and not is_known_good(path)
+
+
+def full_windows_path(path):
+    """Service paths are often written in short forms; turn them into C:\\Windows\\... (lowercase):
+    '%SystemRoot%\\System32\\svchost.exe', '\\SystemRoot\\System32\\drivers\\x.sys',
+    'System32\\drivers\\x.sys' and '\\??\\C:\\...' all point into the Windows folder or a full path."""
+    path = path.lower().replace("%systemroot%", "c:\\windows").replace("%windir%", "c:\\windows")
+    if path.startswith("\\??\\"):
+        path = path[4:]
+    if path.startswith("\\systemroot\\"):
+        path = "c:\\windows\\" + path[len("\\systemroot\\"):]
+    if path.startswith("system32\\"):
+        path = "c:\\windows\\" + path
+    return path
 
 
 def is_public_ip(text):
@@ -405,6 +421,7 @@ def check_persistence(events, context):
         # The program the key will start, without quotes and arguments.
         value_path = value.strip('"').split('"')[0].lower()
         value_path = value_path.split(".exe")[0] + ".exe" if ".exe" in value_path else value_path
+        value_path = full_windows_path(value_path)
 
         # A Run or RunOnce registry key, e.g. ...\Microsoft\Windows\CurrentVersion\Run\FireEye.
         # (\\ is one backslash; (once)? means "Once" may follow "Run".)
@@ -421,6 +438,11 @@ def check_persistence(events, context):
             elif in_user_folder(writer) or in_user_folder(value_path):
                 add_finding(found, target.lower(), e, "persistence", "Starts itself at logon (Run key)",
                             "Weak", writer, detail, e.get("ProcessGuid", ""))
+            # Any other new Run key entry is worth a look too (ATT&CK T1547.001), except a known-good
+            # program, or an installed program adding ITSELF (Edge, Teams and tray apps do this).
+            elif not is_known_good(value_path) and file_name(writer) != file_name(value_path):
+                add_finding(found, target.lower(), e, "persistence", "New program set to start at logon",
+                            "Weak", writer, detail, e.get("ProcessGuid", ""))
         # The program path of a Windows service: ...\Services\<service name>\ImagePath.
         # ([^\\]+ is the service name: one or more characters that are not a backslash.)
         elif re.search(r"\\services\\[^\\]+\\imagepath$", target, re.IGNORECASE):
@@ -432,14 +454,22 @@ def check_persistence(events, context):
             # drivers from its DriverStore) create new service files all the time.
             if is_known_good(value_path) or "\\windows\\system32\\driverstore\\" in value_path:
                 continue
+            service = target.split("\\")[-2]
+            # Point at the service program itself (not services.exe, which wrote the key).
+            guid = next((p["ProcessGuid"] for p in context["processes"].values()
+                         if p.get("Image", "").lower() == value_path), "")
             if (dropped and not in_program_files) or in_user_folder(value_path):
-                service = target.split("\\")[-2]
-                # Point at the service program itself (not services.exe, which wrote the key).
-                guid = next((p["ProcessGuid"] for p in context["processes"].values()
-                             if p.get("Image", "").lower() == value_path), "")
                 add_finding(found, target.lower(), e, "persistence", SERVICE_TITLE,
                             "Strong", value_path, f"service '{service}' runs {value[:150]}, a file "
                             "created during this log", guid)
+            # Any other new or changed service is worth a look too (ATT&CK T1543.003), except one in
+            # the Windows folder (Windows updates rewrite those all the time). A service that runs a
+            # shell (cmd /c ..., %COMSPEC%, powershell) is the PsExec / attack-tool pattern
+            # (T1569.002), so it is reported even though cmd.exe lives in the Windows folder.
+            elif (not value_path.startswith("c:\\windows\\") or file_name(value_path) in SHELLS
+                  or "%comspec%" in value.lower()):
+                add_finding(found, target.lower(), e, "persistence", "New or changed service",
+                            "Weak", value_path or value, f"service '{service}' runs {value[:150]}", guid)
     return list(found.values())
 
 
@@ -493,6 +523,50 @@ def check_network_from_user_folder(events, context):
                         "User-folder program went online", "Weak", image,
                         f"{file_name(image)} connected to {ip}:{e.get('DestinationPort', '')}",
                         e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# Programs that run scripts or other code for someone else (ATT&CK T1059 Command and Scripting
+# Interpreter, T1218 System Binary Proxy Execution).
+SCRIPT_HOSTS = {"powershell.exe", "pwsh.exe", "rundll32.exe", "regsvr32.exe", "mshta.exe",
+                "wscript.exe", "cscript.exe"}
+
+
+def check_script_host_online(events, context):
+    """Weak: a script or proxy host (PowerShell, rundll32, mshta, wscript...) itself connected to a
+    public IP: how download cradles and beacons talk to the internet (T1105, T1071).
+    Dual-use: admin scripts also download updates, so Low. Connections TO the computer
+    (Initiated = false) and to private addresses are not reported."""
+    found = {}
+    for e in events_of(events, 3):
+        image, ip = e.get("Image", ""), e.get("DestinationIp", "")
+        outgoing = e.get("Initiated", "true").lower() == "true"
+        if file_name(image) in SCRIPT_HOSTS and is_public_ip(ip) and outgoing:
+            add_finding(found, (image.lower(), ip), e, "script_host_online", "Script host went online",
+                        "Weak", image, f"{file_name(image)} connected to {ip}:{e.get('DestinationPort', '')}",
+                        e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# Remote-access and remote-management (RMM) tools, by the start of their program names. Source:
+# the LOLRMM project (lolrmm.io) and CISA advisory AA23-025A on RMM tools misused by attackers
+# (ATT&CK T1219 Remote Access Software). Dual-use: help desks use them every day, so Low.
+REMOTE_ACCESS_TOOLS = ("anydesk", "teamviewer", "screenconnect", "connectwisecontrol", "rustdesk",
+                       "splashtop", "srservice", "ateraagent", "ninjarmmagent", "agentmon", "logmein",
+                       "rutserv", "rfusclient", "supremo", "meshagent", "action1", "simplehelp",
+                       "remotepc", "tightvnc", "tvnserver", "ultravnc", "winvnc")
+
+
+def check_remote_access_tool(events, context):
+    """Weak: a remote-access / RMM tool was installed or ran. One finding per tool."""
+    found = {}
+    for e in events_of(events, 1):
+        name = file_name(e.get("Image"))
+        tool = next((t for t in REMOTE_ACCESS_TOOLS if name.startswith(t)), None)
+        if tool:
+            add_finding(found, tool, e, "remote_access_tool", "Remote-access tool ran", "Weak",
+                        e.get("Image", ""), f"{name} ran (a remote-access tool: was a support session "
+                        "planned?)", e.get("ProcessGuid", ""))
     return list(found.values())
 
 
@@ -769,6 +843,8 @@ ALL_CHECKS = [
     check_ransom_note,
     check_run_from_user_folder,
     check_network_from_user_folder,
+    check_script_host_online,
+    check_remote_access_tool,
     check_remote_execution,
     check_access_change,
     check_scheduled_task,
@@ -792,8 +868,11 @@ ALL_CHECKS = [
 #   2. that chain program is a proxy host (rundll32, regsvr32, mshta: ATT&CK T1218, "System
 #      Binary Proxy Execution"), which admins do not use to run commands; or
 #   3. a High finding that is NOT dual-use shares a program with its chain (e.g. the same
-#      program also deleted backups). Two dual-use findings never back each other up: an RMM
-#      tool does recon and runs download scripts on the same day.
+#      program also deleted backups); or
+#   4. a High finding of a DIFFERENT dual-use kind shares a program with its chain (e.g. recon
+#      plus download-and-run, or recon plus an LSASS read): two different steps of an attack
+#      in one chain are a coherent story, not one ambiguous action. (Two findings of the same
+#      kind, e.g. two recon bursts, do not count.)
 # Never dual-use (High on their own): disguised programs, ransom notes, stolen passwords,
 # logs/backups deleted, UAC bypass, a document starting a shell.
 DUAL_USE_CHECKS = {"recon_burst", "lookalike_domain", "suspicious_powershell", "lsass_access"}
@@ -803,6 +882,11 @@ PROXY_HOSTS = {"rundll32.exe", "regsvr32.exe", "mshta.exe"}
 
 def is_dual_use(finding):
     return finding["check"] in DUAL_USE_CHECKS or finding["title"] == SERVICE_TITLE
+
+
+def kind_of(finding):
+    """What kind of action a finding is: its check, or its title for the two kinds of persistence."""
+    return finding["title"] if finding["check"] == "persistence" else finding["check"]
 
 
 def chain_of(finding, context):
@@ -833,9 +917,17 @@ def apply_dual_use_gate(findings, context):
             programs += list(chain.values())  # also the program that wrote its file
         if any(in_user_folder(p) or file_name(p) in PROXY_HOSTS for p in programs):
             continue  # rules 1 and 2
-        backed = any(other["strength"] == "Strong" and not is_dual_use(other)
-                     and set(chain) & set(chain_of(other, context)) for other in findings)
-        if not backed:  # rule 3
+        backed = False
+        for other in findings:
+            if other is f or other["strength"] != "Strong":
+                continue
+            if not set(chain) & set(chain_of(other, context)):
+                continue  # not in the same process chain
+            if not is_dual_use(other):
+                backed = True  # rule 3
+            elif kind_of(other) != kind_of(f):
+                backed = True  # rule 4
+        if not backed:
             to_lower.append(f)
     # Changed only after all were decided, so the order of the findings does not matter.
     for f in to_lower:

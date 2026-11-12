@@ -103,6 +103,8 @@ ATTACK_TAGS = {
     "run_from_user_folder": ("Execution", "T1204.002 User Execution: Malicious File"),
     "network_from_user_folder": ("Command and Control", "T1071.001 Web Protocols"),
     "dll_from_user_folder": ("Defense Evasion", "T1218.011 Rundll32"),
+    "script_host_online": ("Command and Control", "T1105 Ingress Tool Transfer"),
+    "remote_access_tool": ("Command and Control", "T1219 Remote Access Software"),
     # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
     # these are only the defaults.
     "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
@@ -153,6 +155,10 @@ SENTENCES = {
     "scheduled_task": "{detail}. A task runs again later, so it can also keep malware running.",
     "tool_download": "{detail}. This Windows program is not a download tool, a known way to bring in malware.",
     "dll_from_user_folder": "{detail}: a DLL started from a folder any user can write to.",
+    "script_host_online": "{detail}: a script program talking to the internet itself, as download "
+                          "commands and remote-control malware do.",
+    "remote_access_tool": "{detail}. Help desks use these tools, and so do attackers who talk a user "
+                          "into installing one.",
     "credential_theft": "{detail}. This steals saved passwords: treat every account used on this computer "
                         "as known to the attacker.",
     "evidence_removal": "{detail}. Attackers do this to hide what they did or to stop recovery.",
@@ -541,6 +547,11 @@ ACTIONS = {
                                       "SHA256 and check its reputation.")],
     "dll_from_user_folder": [("Investigate", "Collect the DLL listed under Findings and check its SHA256 "
                                              "and signature.")],
+    "script_host_online": [("Investigate", "Check what the script program downloaded or sent (see the "
+                                           "command under Findings) and the reputation of the IP.")],
+    "remote_access_tool": [("Investigate", "Ask the user and the help desk whether a support session was "
+                                           "planned (a ticket); if not, remove the tool and treat it as "
+                                           "an intrusion.")],
     "credential_theft": [("Contain", "Reset the passwords of every account used on this computer, and "
                                      "sign them out of websites (stolen cookies stay valid until then)."),
                          ("Investigate", "Check where those accounts signed in after the theft.")],
