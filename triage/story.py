@@ -116,8 +116,6 @@ SENTENCES = {
     "network_from_user_folder": "{detail}, a server on the internet (possible command and control).",
 }
 
-TACTIC_ORDER = ["Initial Access", "Execution", "Persistence", "Defense Evasion", "Credential Access",
-                "Discovery", "Command and Control", "Impact"]
 PHASES = ["Investigate", "Contain", "Eradicate", "Recover"]  # NIST SP 800-61 incident response
 
 

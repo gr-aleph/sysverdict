@@ -4,6 +4,10 @@ from tests.fixtures.events import USER, attack_events, benign_events, event
 from triage import story
 from triage.checks import make_verdict, run_checks
 
+# The MITRE ATT&CK tactics the story may use.
+TACTICS = ["Initial Access", "Execution", "Persistence", "Defense Evasion", "Credential Access",
+           "Discovery", "Command and Control", "Impact"]
+
 
 def steps_of(events):
     return story.build_steps(events, run_checks(events))
@@ -104,7 +108,7 @@ def test_every_step_has_a_tag_proof_and_a_number():
     steps = steps_of(events)
     assert [s["number"] for s in steps] == list(range(1, len(steps) + 1))
     for s in steps:
-        assert s["tactic"] in story.TACTIC_ORDER
+        assert s["tactic"] in TACTICS
         assert s["event_ids"] and set(s["event_ids"]) <= ids
     assert all(s["technique"] for s in steps[1:])
 
