@@ -81,6 +81,13 @@ ATTACK_TAGS = {
     "ransom_note": ("Impact", "T1486 Data Encrypted for Impact"),
     "run_from_user_folder": ("Execution", "T1204.002 User Execution: Malicious File"),
     "network_from_user_folder": ("Command and Control", "T1071.001 Web Protocols"),
+    "dll_from_user_folder": ("Defense Evasion", "T1218.011 Rundll32"),
+    # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
+    # these are only the defaults.
+    "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
+    "access_change": ("Persistence", "T1098 Account Manipulation"),
+    "scheduled_task": ("Persistence", "T1053.005 Scheduled Task"),
+    "tool_download": ("Command and Control", "T1105 Ingress Tool Transfer"),
 }
 
 # A recon burst is tagged by the discovery tool that ran first (other tools: T1033 above).
@@ -116,6 +123,11 @@ SENTENCES = {
     "ransom_note": "A possible ransom note was opened ({detail}). Treat this as a ransomware incident.",
     "run_from_user_folder": "{detail}.",
     "network_from_user_folder": "{detail}, a server on the internet (possible command and control).",
+    "remote_execution": "{detail}. Admins do this, but so do attackers spreading to other computers.",
+    "access_change": "{detail}. Admins do this, but so do attackers keeping a way back in.",
+    "scheduled_task": "{detail}. A task runs again later, so it can also keep malware running.",
+    "tool_download": "{detail}. This Windows program is not a download tool, a known way to bring in malware.",
+    "dll_from_user_folder": "{detail}: a DLL started from a folder any user can write to.",
 }
 
 PHASES = ["Investigate", "Contain", "Eradicate", "Recover"]  # NIST SP 800-61 incident response
@@ -283,6 +295,8 @@ def tag_key(finding):
 def finding_step(f, events_by_id):
     key = tag_key(f)
     tactic, technique = ATTACK_TAGS[key]
+    if f.get("technique"):  # the command-line checks give the exact tag of the rule that matched
+        tactic, technique = f["tactic"], f["technique"]
     if f["check"] == "lookalike_domain" and f["strength"] == "Weak":
         tactic, technique = "Initial Access", "T1566.002 Spearphishing Link (possible)"
     first = events_by_id[f["event_ids"][0]]  # the finding's earliest event
@@ -488,6 +502,15 @@ ACTIONS = {
     "network_from_user_folder": [("Contain", "Block the attacker IPs listed under IOCs at the firewall.")],
     "run_from_user_folder": [("Investigate", "Ask the user whether they installed the programs listed "
                                              "under Findings.")],
+    "remote_execution": [("Investigate", "Ask the admin whether the remote commands were planned (change "
+                                         "ticket), and check the other computers for what ran there.")],
+    "access_change": [("Investigate", "Confirm the new or changed accounts and firewall rules with IT; "
+                                      "remove any nobody asked for.")],
+    "scheduled_task": [("Investigate", "Check what the new scheduled task runs and who created it.")],
+    "tool_download": [("Investigate", "Find the downloaded file (see the command under Findings), get its "
+                                      "SHA256 and check its reputation.")],
+    "dll_from_user_folder": [("Investigate", "Collect the DLL listed under Findings and check its SHA256 "
+                                             "and signature.")],
 }
 
 

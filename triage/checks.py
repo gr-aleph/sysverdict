@@ -442,6 +442,142 @@ def check_network_from_user_folder(events, context):
     return list(found.values())
 
 
+# ---------- command-line checks (one list of patterns per check) ----------
+# Each rule is (pattern, what it means, ATT&CK tactic, ATT&CK technique). The patterns are searched
+# in a program's command line, ignoring upper/lower case. Reading guide for the patterns:
+#   \b = a word edge   \s = a space   \S = not a space   .* = anything   (x)? = x is optional
+#   \\\\ = the two backslashes of a network path (\\server)   [a-z0-9._-]+ = a computer name
+#   (a|b) = a or b   \"? = an optional quote (paths are often written in quotes)
+
+def rule(pattern, what, tactic, technique):
+    return re.compile(pattern, re.IGNORECASE), what, tactic, technique
+
+
+# Running commands on another computer. Admins do this every day, so these are Weak.
+REMOTE_EXECUTION_RULES = [
+    # PsExec / PaExec followed by a computer: "PsExec64.exe \\SRV-01 cmd"
+    rule(r"\b(ps|pa)exec(64)?(\.exe)?\"?\s.*\\\\[a-z0-9._-]+", "runs a program on another computer with PsExec",
+         "Lateral Movement", "T1021.002 SMB/Windows Admin Shares"),
+    # WMI on another computer: "wmic /node:SRV-01 process call create ..."
+    rule(r"\bwmic(\.exe)?\b.*\s/node:", "runs a command on another computer with WMI",
+         "Execution", "T1047 Windows Management Instrumentation"),
+    # Windows Remote Shell: "winrs -r:SRV-01 cmd"
+    rule(r"\bwinrs(\.exe)?\b.*\s[-/]r(emote)?:", "runs a command on another computer with WinRS",
+         "Lateral Movement", "T1021.006 Windows Remote Management"),
+    # PowerShell remoting: Invoke-Command -ComputerName ..., Enter-PSSession, New-PSSession
+    rule(r"invoke-command\b.*-computername|enter-pssession|new-pssession",
+         "runs PowerShell on another computer", "Lateral Movement", "T1021.006 Windows Remote Management"),
+    # A scheduled task or service on another computer: "schtasks /create /s SRV-01 ...", "sc \\SRV-01 create"
+    rule(r"\bschtasks(\.exe)?\b.*\s/s\s+\S", "creates or changes a scheduled task on another computer",
+         "Lateral Movement", "T1053.005 Scheduled Task"),
+    rule(r"\bsc(\.exe)?\"?\s+\\\\[a-z0-9._-]+", "creates or changes a service on another computer",
+         "Lateral Movement", "T1569.002 Service Execution"),
+    # An admin share: \\SRV-01\C$ or \\SRV-01\ADMIN$ (copying tools there, or "net use" to it)
+    rule(r"\\\\[a-z0-9._-]+\\([a-z]|admin)\$", "uses an administrative share on another computer",
+         "Lateral Movement", "T1570 Lateral Tool Transfer"),
+]
+
+# Creating accounts, giving admin rights, opening the firewall. Admins do this too: Weak.
+ACCESS_CHANGE_RULES = [
+    # "net user helpdesk **** /add" (net1.exe is the same tool)
+    rule(r"\bnet1?(\.exe)?\"?\s+user\s+\S+.*\s/add\b", "creates a user account",
+         "Persistence", "T1136.001 Local Account"),
+    # "net localgroup Administrators helpdesk /add", also Domain Admins and Remote Desktop Users
+    rule(r"\bnet1?(\.exe)?\"?\s+(localgroup|group)\s+\"?(administrators|domain admins|enterprise admins|"
+         r"remote desktop users)\"?\s+\S+.*\s/add\b", "adds an account to a privileged group",
+         "Persistence", "T1098 Account Manipulation"),
+    # The same with PowerShell: New-LocalUser, Add-LocalGroupMember -Group Administrators
+    rule(r"new-localuser\b", "creates a user account", "Persistence", "T1136.001 Local Account"),
+    rule(r"add-localgroupmember\b.*(administrators|remote desktop users)", "adds an account to a privileged group",
+         "Persistence", "T1098 Account Manipulation"),
+    # "netsh advfirewall firewall set rule ... enable=yes", "netsh firewall add ..."
+    rule(r"\bnetsh(\.exe)?\b.*\bfirewall\b.*\b(add|set|delete)\b", "changes the Windows firewall",
+         "Defense Evasion", "T1562.004 Disable or Modify System Firewall"),
+]
+
+# A new scheduled task (it runs again later, often as SYSTEM). Many admin and update tools do
+# this too: Weak.
+SCHEDULED_TASK_RULES = [
+    rule(r"\bschtasks(\.exe)?\b.*\s/create\b", "creates a scheduled task", "Persistence", "T1053.005 Scheduled Task"),
+    rule(r"register-scheduledtask\b", "creates a scheduled task", "Persistence", "T1053.005 Scheduled Task"),
+]
+
+# Windows programs that are not download tools but can be misused to download files
+# ("living off the land"). curl.exe is a real download tool, so it is not on this list. Weak.
+TOOL_DOWNLOAD_RULES = [
+    # "certutil -urlcache -split -f http://.../a.dat a.dat", "certutil -decode in.txt out.exe"
+    rule(r"\bcertutil(\.exe)?\b.*\s[-/](urlcache|verifyctl)\b", "downloads a file with certutil",
+         "Command and Control", "T1105 Ingress Tool Transfer"),
+    rule(r"\bcertutil(\.exe)?\b.*\s[-/]decode\b", "decodes a file with certutil",
+         "Defense Evasion", "T1140 Deobfuscate/Decode Files or Information"),
+    # "bitsadmin /transfer job http://.../a.exe C:\a.exe"
+    rule(r"\bbitsadmin(\.exe)?\b.*\s/(transfer|addfile|download)\b", "downloads a file with bitsadmin",
+         "Command and Control", "T1105 Ingress Tool Transfer"),
+    # "mshta http://.../page.hta" (runs a web page as a program)
+    rule(r"\bmshta(\.exe)?\"?\s+\"?https?://", "runs a web page with mshta",
+         "Defense Evasion", "T1218.005 Mshta"),
+    # "regsvr32 /s /u /i:http://.../file.sct scrobj.dll"
+    rule(r"\bregsvr32(\.exe)?\b.*\s/i:\"?https?://", "runs a script from the internet with regsvr32",
+         "Defense Evasion", "T1218.010 Regsvr32"),
+]
+
+
+def check_by_rules(events, check, title, strength, rules):
+    """Shared by the command-line checks: one finding per program and rule, with the rule's
+    own ATT&CK tag (so a PsExec line and a WMI line get different techniques)."""
+    found = {}
+    for e in events_of(events, 1):
+        command = e.get("CommandLine", "")
+        for pattern, what, tactic, technique in rules:
+            if pattern.search(command):
+                key = (file_name(e.get("Image")), what)
+                add_finding(found, key, e, check, title, strength, e.get("Image", ""),
+                            f"{file_name(e.get('Image'))} {what}: {command[:180]}", e.get("ProcessGuid", ""))
+                found[key]["tactic"], found[key]["technique"] = tactic, technique
+                break  # one rule per command line is enough
+    return list(found.values())
+
+
+def check_remote_execution(events, context):
+    """Weak: a command run on another computer (PsExec, WMI, WinRS, remoting, admin shares)."""
+    return check_by_rules(events, "remote_execution", "Command run on another computer", "Weak",
+                          REMOTE_EXECUTION_RULES)
+
+
+def check_access_change(events, context):
+    """Weak: a new account, an account added to an admin group, or a firewall change."""
+    return check_by_rules(events, "access_change", "Account or firewall change", "Weak", ACCESS_CHANGE_RULES)
+
+
+def check_scheduled_task(events, context):
+    """Weak: a scheduled task was created."""
+    return check_by_rules(events, "scheduled_task", "Scheduled task created", "Weak", SCHEDULED_TASK_RULES)
+
+
+def check_tool_download(events, context):
+    """Weak: a Windows program that is not a download tool was used to download or decode a file."""
+    return check_by_rules(events, "tool_download", "Download with a Windows tool", "Weak", TOOL_DOWNLOAD_RULES)
+
+
+# A DLL path in a command line, e.g. "C:\Users\a\AppData\Roaming\x\update.dll":
+# a drive letter, :\, then any characters except quotes and commas, up to ".dll".
+DLL_PATH = re.compile(r"[a-z]:\\[^\",]*?\.dll", re.IGNORECASE)
+
+
+def check_dll_from_user_folder(events, context):
+    """Weak: rundll32 or regsvr32 runs a DLL from a user folder (Downloads, AppData, Temp...)."""
+    found = {}
+    for e in events_of(events, 1):
+        if file_name(e.get("Image")) not in ("rundll32.exe", "regsvr32.exe"):
+            continue
+        for dll in DLL_PATH.findall(e.get("CommandLine", "")):
+            if in_user_folder(dll):
+                add_finding(found, dll.lower(), e, "dll_from_user_folder", "DLL run from a user folder", "Weak",
+                            e.get("Image", ""), f"{file_name(e.get('Image'))} ran {dll}", e.get("ProcessGuid", ""))
+                break
+    return list(found.values())
+
+
 ALL_CHECKS = [
     check_document_app_spawns_program,
     check_suspicious_powershell,
@@ -453,6 +589,11 @@ ALL_CHECKS = [
     check_ransom_note,
     check_run_from_user_folder,
     check_network_from_user_folder,
+    check_remote_execution,
+    check_access_change,
+    check_scheduled_task,
+    check_tool_download,
+    check_dll_from_user_folder,
 ]
 
 

