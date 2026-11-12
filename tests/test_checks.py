@@ -95,7 +95,7 @@ def test_passwords_are_hidden():
     assert hide("New-Thing -Password 'Secret 1' -Force") == "New-Thing -Password **** -Force"
     assert hide('schtasks /create /tn T /ru admin /rp "Secret 1"') == "schtasks /create /tn T /ru admin /rp ****"
     assert hide("Server=db01;Database=x;Pwd=Secret1;") == "Server=db01;Database=x;Pwd=****;"
-    assert hide("net user helpdesk Winter#26 /add") == "net user helpdesk **** /add"
+    assert hide("net user helpdesk Pa55-word! /add") == "net user helpdesk **** /add"
     assert hide('"C:\\Windows\\System32\\net.exe" user "help desk" Secret1') == \
         '"C:\\Windows\\System32\\net.exe" user "help desk" ****'
     for text in ["net user helpdesk /add", "net user helpdesk * /add", "net user /domain",
