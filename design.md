@@ -25,7 +25,8 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
 - **What leaves the machine:** nothing in offline mode (the default). Otherwise, only after the analyst presses
   *Enrich IOCs*: SHA256 hashes, public IPv4 addresses and public domains of flagged programs, sent to the local
   backends. Raw events, usernames, hostnames, paths, registry keys, private IPs, IPv6 and internal names are
-  never sent (`check_shareable` in `triage/iocs.py`).
+  never sent (`check_shareable` in `triage/iocs.py`). Neither are the organisation's own domains: the DNS
+  suffix of each full computer name in the log (pc01.contoso.com -> contoso.com) and its subdomains.
 - **No third-party loading:** Streamlit telemetry is off, fonts are bundled, and the process tree is plain HTML/CSS
   with no external JavaScript.
 
@@ -37,7 +38,7 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
 | enrichment-portal-simple | `GET /api/ip/{ipv4}`; no health route, so any answer to `GET /api/ip/` means running | `verdict.level`, `verdict.score`, `verdict.summary` | 503 -> sources unavailable; `not_applicable` -> not judged |
 | ioc-simple-dns | `GET /api/v1/domain/{name}`, health `GET /api/v1/health` | `assessment.verdict`, `assessment.verdict_label`, `assessment.average` | `not_graded` -> not enriched |
 
-Connection errors, timeouts and non-JSON replies always become "not enriched" with a reason; they never stop the page.
+Connection errors, timeouts, non-JSON replies and answers with an unexpected shape always become "not enriched" with a reason; they never stop the page.
 
 ## Decisions
 
@@ -47,10 +48,10 @@ Connection errors, timeouts and non-JSON replies always become "not enriched" wi
 - **Small known-good list (`data/known_good.txt`):** keeps common software in user folders from being flagged; kept short because each entry is a place malware could hide.
 - **Services installed in Program Files are trusted:** legitimate installers create services there constantly; services dropped elsewhere are flagged.
 - **Discovery commands typed by a person are ignored:** recon launched from an interactive shell is normal administration.
-- **Delivery is reconstructed from the log, not guessed:** the browser download record, parent process and UAC prompt explain how the first file arrived; anything missing is stated as "not in this log".
+- **Delivery is reconstructed from the log, not guessed:** the browser download record, parent process and UAC prompt explain how the first file arrived; anything missing is stated as "not in this log", and no ATT&CK technique is claimed that the log cannot prove.
 - **MITRE ATT&CK tags and NIST phases:** standard vocabulary analysts and their tools already use.
 - **IOCs only for flagged programs:** keeps the list actionable and protects the enrichment sources' rate limits.
-- **Enrichment on demand, capped per run and cached:** nothing leaves by accident and the VirusTotal free tier is respected; errors are never cached.
+- **Enrichment on demand, capped per run and cached:** at most 4 new hashes (VirusTotal free tier), 20 new IPs and 20 new domains per run; nothing leaves by accident; errors are never cached.
 - **Enrichment can raise the verdict, never lower it:** "no known bad" from a source is absence of evidence and does not cancel a finding.
 - **Addresses are shown exactly but never as links:** the page renders URLs, domains and IPs as code text so nobody opens an attacker's site by accident.
 - **An indented process tree, not a graph drawing:** a fixed layout cannot overlap and reads top to bottom like an EDR process view.
