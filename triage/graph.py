@@ -5,6 +5,7 @@ build_process_tree() returns plain rows; app.py draws them as HTML (each row ind
 """
 
 from triage.story import attack_processes, display_name
+from triage.timeline import in_zone
 
 MAX_TREE_LINES = 80  # a very long tree is cut here so the page stays fast
 
@@ -28,8 +29,8 @@ def action_text(e):
     return None
 
 
-def build_process_tree(events, findings, steps):
-    """Rows for the process tree. Each row is a dict:
+def build_process_tree(events, findings, steps, zone_name=None):
+    """Rows for the process tree, with times in the chosen time zone (UTC if none). Each row is a dict:
 
         {"depth": 0, 1, 2, ... (how far it is indented),
          "kind": "context" (normal program that started the attack) / "malicious" / "attack" / "action",
@@ -100,11 +101,15 @@ def build_process_tree(events, findings, steps):
 
     rows = []
 
+    def clock(e):
+        """The event's time of day in the chosen zone, e.g. '10:53:39'."""
+        return in_zone(e["time"], zone_name).strftime("%H:%M:%S")
+
     def add_actions(guid, depth):
         """One row per action of this process."""
         for text, e in actions.get(guid, []):
             rows.append({"depth": depth, "kind": "action", "label": text, "detail": "",
-                         "meta": e["time"][11:19], "step": tactic_of_event.get(e["record_id"], "")})
+                         "meta": clock(e), "step": tactic_of_event.get(e["record_id"], "")})
 
     def process_row(guid, depth):
         """The row for one process: its name, command line, time and labels."""
@@ -117,7 +122,7 @@ def build_process_tree(events, findings, steps):
         else:
             kind = "attack"
 
-        meta = [p["time"][11:19]]
+        meta = [clock(p)]
         if p.get("IntegrityLevel") in ("High", "System"):
             meta.append("admin rights")
         if kind == "malicious" and image.lower() in dropped_by:

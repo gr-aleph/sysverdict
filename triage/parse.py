@@ -57,8 +57,10 @@ def read_evtx(path):
         for record in log.records():
             try:
                 event = event_from_xml(record.xml())
-            except (ET.ParseError, AttributeError):
-                continue  # a damaged record: skip it rather than fail the whole file
+            except Exception:
+                # A damaged record (bad XML, or an error inside python-evtx while decoding it):
+                # skip it rather than fail the whole file.
+                continue
             if event is not None:
                 events.append(event)
 

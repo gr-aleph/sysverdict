@@ -2,6 +2,7 @@
 
 from tests.fixtures.events import attack_events, benign_events, event
 from triage.checks import edit_distance, make_verdict, run_checks
+from triage import parse
 from triage.parse import event_from_xml
 
 
@@ -65,6 +66,54 @@ def test_lookalike_domain_from_browser_is_weak():
     findings = run_checks(events)
     assert findings[0]["strength"] == "Weak"
     assert make_verdict(findings)["label"] == "Suspicious"
+
+
+def test_lookalike_becomes_strong_when_malware_looks_it_up_after_a_browser():
+    # The browser lookup comes first (Weak), then a program in a user folder looks up the same name.
+    events = [event(1, 22, "2026-01-05 09:00:00.000", Image="C:\\Program Files\\Google\\Chrome\\chrome.exe",
+                    QueryName="gmailc.om"),
+              event(2, 22, "2026-01-05 09:05:00.000", Image="C:\\Users\\analyst\\AppData\\Local\\Temp\\x.exe",
+                    QueryName="gmailc.om")]
+    lookalike = [f for f in run_checks(events) if f["check"] == "lookalike_domain"]
+    assert len(lookalike) == 1
+    assert lookalike[0]["strength"] == "Strong"
+    assert lookalike[0]["process"].endswith("x.exe") and "browser" not in lookalike[0]["detail"]
+    assert lookalike[0]["time"] == "2026-01-05 09:00:00.000"  # still starts at the first lookup
+    assert lookalike[0]["event_ids"] == [1, 2]
+
+
+def test_one_damaged_record_does_not_stop_the_file(monkeypatch):
+    good_xml = ('<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System>'
+                '<Provider Name="Microsoft-Windows-Sysmon"/><EventID>1</EventID>'
+                '<TimeCreated SystemTime="2026-01-05 09:00:0{n}.000000+00:00"/><EventRecordID>{n}</EventRecordID>'
+                '<Computer>LAB-PC01</Computer></System><EventData>'
+                '<Data Name="UtcTime">2026-01-05 09:00:0{n}.000</Data><Data Name="Image">C:\\a.exe</Data>'
+                '</EventData></Event>')
+
+    class Record:
+        def __init__(self, n):
+            self.n = n
+
+        def xml(self):
+            if self.n == 2:
+                raise ValueError("python-evtx could not decode this record")
+            return good_xml.format(n=self.n)
+
+    class FakeEvtx:  # stands in for Evtx.Evtx.Evtx: a "with" block that lists records
+        def __init__(self, path):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def records(self):
+            return [Record(1), Record(2), Record(3)]
+
+    monkeypatch.setattr(parse.evtx, "Evtx", FakeEvtx)
+    assert [e["record_id"] for e in parse.read_evtx("any.evtx")] == [1, 3]
 
 
 def test_lsass_access_from_unknown_program_is_strong():

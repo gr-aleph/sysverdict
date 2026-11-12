@@ -41,6 +41,18 @@ def test_indented_process_tree():
     assert all(r["depth"] > 0 for r in rows if r["kind"] != "context")
 
 
+def test_process_tree_uses_the_chosen_time_zone():
+    events = attack_events()
+    findings, steps = analysed(events)
+    utc = graph.build_process_tree(events, findings, steps)
+    singapore = graph.build_process_tree(events, findings, steps, "Asia/Singapore")  # UTC+8
+    timed = [(a["meta"], b["meta"]) for a, b in zip(utc, singapore) if a["meta"]]
+    assert timed
+    for utc_meta, local_meta in timed:
+        assert (int(utc_meta[:2]) + 8) % 24 == int(local_meta[:2])
+        assert utc_meta[2:8] == local_meta[2:8]  # same minutes and seconds
+
+
 def test_no_process_tree_for_a_benign_log():
     assert graph.build_process_tree(benign_events(), [], []) == []
 

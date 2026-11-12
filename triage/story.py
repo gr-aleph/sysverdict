@@ -510,9 +510,12 @@ def next_steps(findings, verdict, steps=()):
                 for phase, text in actions:
                     add(phase, text)
         for step in steps:
-            if step.get("kind") == "origin" and "://" in step["text"]:
-                host = step["text"].split("://", 1)[1].split("/", 1)[0]
-                add("Contain", f"Block the download site {host} at the web proxy.")
+            # The host of the download address: the characters after "://" up to the first
+            # "/", space, comma, quote or bracket ([^...]+ = one or more characters NOT in the list),
+            # so "https://a.com, from the page ..." gives "a.com".
+            found = re.search(r"://([^/\s,;'\"()`]+)", step["text"]) if step.get("kind") == "origin" else None
+            if found:
+                add("Contain", f"Block the download site {found.group(1)} at the web proxy.")
             if step.get("technique", "").startswith("T1566.001"):
                 add("Investigate", "Find the email and remove it from every mailbox.")
         if verdict["label"] == "Malicious":

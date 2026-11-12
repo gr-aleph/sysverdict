@@ -146,6 +146,16 @@ def test_next_steps_use_nist_phases():
     assert any("www.fireeyee.com" in step for step in plan["Contain"])
 
 
+def test_download_site_host_without_a_path():
+    malicious = {"label": "Malicious", "reason": ""}
+    no_path = [{"kind": "origin", "technique": "",
+                "text": "The user downloaded a.exe with Edge from https://a.com, from the page https://b.com/."}]
+    with_path = [{"kind": "origin", "technique": "",
+                  "text": "The user downloaded a.exe with Edge from https://www.a.com/x/a.exe."}]
+    assert "Block the download site a.com at the web proxy." in story.next_steps([], malicious, no_path)["Contain"]
+    assert "Block the download site www.a.com at the web proxy." in story.next_steps([], malicious, with_path)["Contain"]
+
+
 def test_benign_next_steps_are_investigate_only():
     plan = story.next_steps([], make_verdict([]))
     assert list(plan) == ["Investigate"]

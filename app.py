@@ -383,7 +383,7 @@ def h(text):
 
 
 with tabs[3]:
-    tree_rows = graph.build_process_tree(events, findings, steps)
+    tree_rows = graph.build_process_tree(events, findings, steps, zone)
     if not tree_rows:
         st.info("No attack steps, so there is no process tree to show.")
     else:
