@@ -57,6 +57,7 @@ st.markdown("""
   .chip-tactic {background: #2A3440; color: #5CC8FF;}
   .card {background: #1A2129; border: 1px solid #2A3440; border-radius: 6px; padding: .8rem 1rem; margin-bottom: .6rem;}
   .card .title {font-weight: 600; font-size: 1.02rem;}
+  .card.start .title {color: #5CC8FF;}  /* the 1-2-3 cards on the start page */
   .day {font-weight: 700; color: #5CC8FF; letter-spacing: .05em; margin: .8rem 0 .3rem 0;}
   .clock {font-family: "IBM Plex Mono", monospace; color: #8B96A3; margin-right: .6rem;}
   .phase {font-weight: 700; margin-top: .6rem;} .phase span {color: #8B96A3; font-weight: 400; font-size: .8rem;}
@@ -210,11 +211,11 @@ if uploaded is None and sample is None:
     st.markdown('<div class="wordmark wordmark-big">SYS<span>VERDICT</span></div>', unsafe_allow_html=True)
     st.markdown(f'<div class="tagline">{TAGLINE}</div>', unsafe_allow_html=True)
     left, middle, right = st.columns(3)
-    left.markdown('<div class="card"><div class="title">1. Upload</div>Sysmon logs only (.evtx). '
+    left.markdown('<div class="card start"><div class="title">1. Upload</div>Sysmon logs only (.evtx). '
                   'Other Windows event logs are not supported.</div>', unsafe_allow_html=True)
-    middle.markdown('<div class="card"><div class="title">2. Analyze</div>Detects known attacker behavior.</div>',
+    middle.markdown('<div class="card start"><div class="title">2. Analyze</div>Detects known attacker behavior.</div>',
                     unsafe_allow_html=True)
-    right.markdown('<div class="card"><div class="title">3. Respond</div>An evidence-backed verdict with clear '
+    right.markdown('<div class="card start"><div class="title">3. Respond</div>An evidence-backed verdict with clear '
                    'next steps and IOCs.</div>', unsafe_allow_html=True)
     st.stop()
 
@@ -322,8 +323,7 @@ with tabs[1]:
         st.success("None of the checks matched. Nothing known-bad is visible in this log.")
     attack = sorted(strong + attack_low, key=lambda f: f["time"]) if strong else []
     if attack:
-        st.subheader("Part of the attack")
-        st.caption("High-confidence findings, and low-confidence ones from the same malicious programs.")
+        st.caption("High- and low-confidence findings and related activity.")
         for number, f in enumerate(attack):
             finding_card(f, f"attack-{number}")
     if other_low:
