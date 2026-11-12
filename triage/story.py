@@ -103,7 +103,7 @@ ATTACK_TAGS = {
 SENTENCES = {
     "document_app_spawns_program": "A document program started another program ({detail}). Documents "
                                    "should not start programs: this is how a malicious document runs its payload.",
-    "suspicious_powershell": "PowerShell ran with encoded, downloading or hidden options.",
+    "suspicious_powershell": "PowerShell ran encoded commands, downloaded code or ran text as code.",
     "lsass_access": "{detail}. LSASS holds Windows passwords, so this is a sign of credential theft.",
     "recon_burst": "{detail}: discovery commands that malware runs to learn who the user is and what "
                    "the network looks like.",

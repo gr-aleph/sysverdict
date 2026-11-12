@@ -6,6 +6,10 @@
 \appdata\local\microsoft\teams\
 \appdata\local\microsoft\edge\
 \appdata\local\programs\microsoft vs code\
+\appdata\local\discord\
+\appdata\roaming\spotify\
+\appdata\roaming\zoom\
+\appdata\local\slack\
 \programdata\microsoft\windows defender\
 \programdata\microsoft\windows defender advanced threat protection\
 \programdata\package cache\

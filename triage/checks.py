@@ -57,9 +57,20 @@ SYSTEM_NAMES = {"svchost.exe", "lsass.exe", "csrss.exe", "services.exe", "smss.e
                 "conhost.exe", "rundll32.exe", "explorer.exe"}
 SYSTEM_FOLDERS = ("c:\\windows\\system32\\", "c:\\windows\\syswow64\\", "c:\\windows\\winsxs\\",
                   "c:\\windows\\explorer.exe")
-# Programs that normally touch LSASS memory.
+# Programs that normally touch LSASS memory, and the folders they must run from to be trusted
+# (a copy of MsMpEng.exe in a user folder is not Microsoft Defender).
 LSASS_OK = {"svchost.exe", "msmpeng.exe", "wininit.exe", "csrss.exe", "wmiprvse.exe",
             "lsass.exe", "services.exe", "mrt.exe"}
+LSASS_OK_FOLDERS = ("c:\\windows\\", "c:\\programdata\\microsoft\\windows defender\\",
+                    "c:\\program files\\windows defender\\")
+# The access right that lets a program read another program's memory (where passwords are).
+PROCESS_VM_READ = 0x0010
+
+# Two-part domain endings: in "shop.example.co.uk" the name is "example", not "co".
+TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
+
+# File endings a ransom note uses (a text or web page the victim is meant to open).
+NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
 
 # PowerShell command-line patterns used to hide or download code. Each one is a regular
 # expression, searched in the lower-case command line. Reading guide:
@@ -76,9 +87,8 @@ SUSPICIOUS_POWERSHELL = [
     r"invoke-webrequest|\biwr\b|net\.webclient|start-bitstransfer",
     # Running text as code: Invoke-Expression (alias iex).
     r"\biex\b|invoke-expression",
-    # Hiding the window: "-w hidden" or "-windowstyle hidden".
-    r"-w(indowstyle)?\s+hidden",
 ]
+# A hidden window alone is not on this list: management agents and scheduled scripts use it too.
 
 # A file name with a fake document ending before a program ending, e.g. "invoice.pdf.exe".
 # Part 1 is the fake ending (docx? = doc or docx, jpe?g = jpg or jpeg); part 2 is the real
@@ -120,6 +130,35 @@ def is_public_ip(text):
 def is_windows_program(path):
     """True for programs in the Windows folder (cmd.exe, powershell.exe, svchost.exe...)."""
     return (path or "").lower().startswith("c:\\windows\\")
+
+
+def reads_memory(granted_access):
+    """True if the access rights (hex text such as "0x1010") include PROCESS_VM_READ.
+    An unknown or broken value counts as True: unknown access to LSASS is worth a look."""
+    try:
+        return (int(granted_access, 16) & PROCESS_VM_READ) != 0
+    except (TypeError, ValueError):
+        return True
+
+
+def main_label(domain):
+    """The name part of a domain: 'cloud.google.com' -> 'google', 'shop.example.co.uk' -> 'example'.
+    A one-part name such as 'wpad' has no name part, so it returns ''."""
+    labels = domain.split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in TWO_PART_ENDINGS:
+        return labels[-3]
+    if len(labels) >= 2:
+        return labels[-2]
+    return ""
+
+
+def lookalike_brand(label):
+    """The brand this label imitates by one letter ('fireeyee' -> 'fireeye'), or None.
+    Short brands (under 5 letters) are skipped: too many normal words are one letter away."""
+    for brand in BRANDS:
+        if len(brand) >= 5 and edit_distance(label, brand) == 1:
+            return brand
+    return None
 
 
 def edit_distance(a, b):
@@ -166,7 +205,7 @@ def check_document_app_spawns_program(events, context):
 
 
 def check_suspicious_powershell(events, context):
-    """Strong: PowerShell with encoded commands, downloads or a hidden window."""
+    """Strong: PowerShell with encoded commands, downloads or running text as code."""
     found = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) not in ("powershell.exe", "pwsh.exe"):
@@ -181,13 +220,18 @@ def check_suspicious_powershell(events, context):
 
 
 def check_lsass_access(events, context):
-    """Strong: a program opened LSASS, the process that holds Windows passwords (Event 10)."""
+    """Strong: a program opened LSASS, the process that holds Windows passwords, with the right
+    to read its memory (Event 10)."""
     found = {}
     for e in events_of(events, 10):
         if not e.get("TargetImage", "").lower().endswith("\\lsass.exe"):
             continue
+        if not reads_memory(e.get("GrantedAccess")):
+            continue  # e.g. Task Manager asking only for basic information (0x1000)
         source = e.get("SourceImage", "")
-        if file_name(source) in LSASS_OK:
+        trusted_name = file_name(source) in LSASS_OK
+        trusted_folder = source.lower().startswith(LSASS_OK_FOLDERS)
+        if trusted_name and trusted_folder:
             continue
         add_finding(found, source.lower(), e, "lsass_access", "Credential access (LSASS)",
                     "Strong", source, f"{file_name(source)} opened lsass.exe "
@@ -250,21 +294,20 @@ def check_masquerading(events, context):
 
 
 def check_lookalike_domain(events, context):
-    """Strong (Weak from a browser): a DNS lookup one letter away from a known brand."""
+    """Strong (Weak from a browser): a DNS lookup whose name part is one letter away from a
+    known brand. Only the name part is compared, so 'cloud.google.com' is not read as 'icloud'."""
     found = {}
     for e in events_of(events, 22):
         domain = e.get("QueryName", "").lower().rstrip(".")
-        labels = domain.split(".")[:-1]  # leave out the last part (com, net, ...)
-        for label in labels:
-            brand = next((b for b in BRANDS if len(b) >= 5 and edit_distance(label, b) == 1), None)
-            if brand:
-                from_browser = file_name(e.get("Image")) in BROWSERS
-                strength = "Weak" if from_browser else "Strong"
-                note = " (from a browser: could be a typing mistake)" if from_browser else ""
-                add_finding(found, domain, e, "lookalike_domain", "Lookalike domain", strength,
-                            e.get("Image", ""), f"{domain} looks like '{brand}'{note}",
-                            e.get("ProcessGuid", ""))
-                break
+        brand = lookalike_brand(main_label(domain))
+        if brand is None:
+            continue
+        from_browser = file_name(e.get("Image")) in BROWSERS
+        strength = "Weak" if from_browser else "Strong"
+        note = " (from a browser: could be a typing mistake)" if from_browser else ""
+        add_finding(found, domain, e, "lookalike_domain", "Lookalike domain", strength,
+                    e.get("Image", ""), f"{domain} looks like '{brand}'{note}",
+                    e.get("ProcessGuid", ""))
     return list(found.values())
 
 
@@ -306,15 +349,20 @@ def check_persistence(events, context):
 
 
 def check_ransom_note(events, context):
-    """Strong: a file or command line that looks like a ransom note."""
+    """Strong: a text or web file whose name looks like a ransom note, created (Event 11) or
+    opened from a command line (Event 1). Other files, such as decrypt_test.py, are ignored."""
     found = {}
     for e in events_of(events, 11) + events_of(events, 1):
         text = e.get("TargetFilename", "") if e["event_id"] == 11 else e.get("CommandLine", "")
         if e["event_id"] == 11:
-            match_text = file_name(text)
+            names = [file_name(text)]
         else:
-            match_text = " ".join(file_name(part) for part in text.split())
-        if RANSOM_NOTE.search(match_text):
+            names = [file_name(part.strip('"')) for part in text.split()]
+        is_note = False
+        for name in names:
+            if name.endswith(NOTE_ENDINGS) and RANSOM_NOTE.search(name):
+                is_note = True
+        if is_note:
             if e["event_id"] == 11:   # the program that wrote the note
                 actor, guid = e.get("Image", ""), e.get("ProcessGuid", "")
             else:                     # the program that opened the note (e.g. in Notepad)
