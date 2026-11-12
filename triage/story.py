@@ -81,6 +81,17 @@ ATTACK_TAGS = {
     "ransom_note": ("Impact", "T1486 Data Encrypted for Impact"),
     "run_from_user_folder": ("Execution", "T1204.002 User Execution: Malicious File"),
     "network_from_user_folder": ("Command and Control", "T1071.001 Web Protocols"),
+    "dll_from_user_folder": ("Defense Evasion", "T1218.011 Rundll32"),
+    # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
+    # these are only the defaults.
+    "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
+    "access_change": ("Persistence", "T1098 Account Manipulation"),
+    "scheduled_task": ("Persistence", "T1053.005 Scheduled Task"),
+    "tool_download": ("Command and Control", "T1105 Ingress Tool Transfer"),
+    "credential_theft": ("Credential Access", "T1555 Credentials from Password Stores"),
+    "evidence_removal": ("Defense Evasion", "T1070 Indicator Removal"),
+    "defender_weakened": ("Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    "uac_bypass": ("Privilege Escalation", "T1548.002 Bypass User Account Control"),
 }
 
 # A recon burst is tagged by the discovery tool that ran first (other tools: T1033 above).
@@ -104,7 +115,7 @@ RECON_TECHNIQUES = {
 SENTENCES = {
     "document_app_spawns_program": "A document program started another program ({detail}). Documents "
                                    "should not start programs: this is how a malicious document runs its payload.",
-    "suspicious_powershell": "PowerShell ran encoded commands, downloaded code or ran text as code.",
+    "suspicious_powershell": "PowerShell downloaded code, ran text as code or decoded hidden code ({detail}).",
     "lsass_access": "{detail}. LSASS holds Windows passwords, so this is a sign of credential theft.",
     "recon_burst": "{detail}: discovery commands that malware runs to learn who the user is and what "
                    "the network looks like.",
@@ -116,6 +127,16 @@ SENTENCES = {
     "ransom_note": "A possible ransom note was opened ({detail}). Treat this as a ransomware incident.",
     "run_from_user_folder": "{detail}.",
     "network_from_user_folder": "{detail}, a server on the internet (possible command and control).",
+    "remote_execution": "{detail}. Admins do this, but so do attackers spreading to other computers.",
+    "access_change": "{detail}. Admins do this, but so do attackers keeping a way back in.",
+    "scheduled_task": "{detail}. A task runs again later, so it can also keep malware running.",
+    "tool_download": "{detail}. This Windows program is not a download tool, a known way to bring in malware.",
+    "dll_from_user_folder": "{detail}: a DLL started from a folder any user can write to.",
+    "credential_theft": "{detail}. This steals saved passwords: treat every account used on this computer "
+                        "as known to the attacker.",
+    "evidence_removal": "{detail}. Attackers do this to hide what they did or to stop recovery.",
+    "defender_weakened": "{detail}. This lets malware run without Microsoft Defender seeing it.",
+    "uac_bypass": "{detail}. This gives a program admin rights without the Windows prompt.",
 }
 
 PHASES = ["Investigate", "Contain", "Eradicate", "Recover"]  # NIST SP 800-61 incident response
@@ -283,6 +304,8 @@ def tag_key(finding):
 def finding_step(f, events_by_id):
     key = tag_key(f)
     tactic, technique = ATTACK_TAGS[key]
+    if f.get("technique"):  # the command-line checks give the exact tag of the rule that matched
+        tactic, technique = f["tactic"], f["technique"]
     if f["check"] == "lookalike_domain" and f["strength"] == "Weak":
         tactic, technique = "Initial Access", "T1566.002 Spearphishing Link (possible)"
     first = events_by_id[f["event_ids"][0]]  # the finding's earliest event
@@ -481,12 +504,33 @@ ACTIONS = {
     "masquerading": [("Investigate", "Collect the disguised file for analysis and search other computers "
                                      "for its SHA256."),
                      ("Eradicate", "Delete the disguised file and all its copies.")],
-    "suspicious_powershell": [("Investigate", "Decode the PowerShell command to see what it downloaded or ran.")],
+    "suspicious_powershell": [("Investigate", "Check what the PowerShell command downloaded (see the decoded "
+                                              "command under Findings) and whether it ran.")],
     "lookalike_domain": [("Contain", "Block the lookalike domain at the DNS filter or web proxy."),
                          ("Investigate", "Search DNS and proxy logs for other computers that visited it.")],
     "network_from_user_folder": [("Contain", "Block the attacker IPs listed under IOCs at the firewall.")],
     "run_from_user_folder": [("Investigate", "Ask the user whether they installed the programs listed "
                                              "under Findings.")],
+    "remote_execution": [("Investigate", "Ask the admin whether the remote commands were planned (change "
+                                         "ticket), and check the other computers for what ran there.")],
+    "access_change": [("Investigate", "Confirm the new or changed accounts and firewall rules with IT; "
+                                      "remove any nobody asked for.")],
+    "scheduled_task": [("Investigate", "Check what the new scheduled task runs and who created it.")],
+    "tool_download": [("Investigate", "Find the downloaded file (see the command under Findings), get its "
+                                      "SHA256 and check its reputation.")],
+    "dll_from_user_folder": [("Investigate", "Collect the DLL listed under Findings and check its SHA256 "
+                                             "and signature.")],
+    "credential_theft": [("Contain", "Reset the passwords of every account used on this computer, and "
+                                     "sign them out of websites (stolen cookies stay valid until then)."),
+                         ("Investigate", "Check where those accounts signed in after the theft.")],
+    "evidence_removal": [("Contain", "Isolate the computer: someone is hiding their tracks."),
+                         ("Investigate", "Collect logs from your SIEM or other computers for the time the "
+                                         "local logs were cleared or Sysmon was off."),
+                         ("Recover", "Restore from offline backups if shadow copies or backups were deleted.")],
+    "defender_weakened": [("Investigate", "Check whether IT made the Defender change on purpose; otherwise "
+                                          "undo it and scan the excluded folder.")],
+    "uac_bypass": [("Eradicate", "Delete the UAC-bypass registry key and the program it starts."),
+                   ("Investigate", "Check what ran with admin rights after the bypass.")],
 }
 
 
@@ -499,7 +543,7 @@ def next_steps(findings, verdict, steps=()):
             plan[phase].append(text)
 
     if verdict["label"] == "Benign":
-        add("Investigate", "Nothing known-bad was found by the 10 checks; this does not prove the "
+        add("Investigate", "Nothing known-bad was found by the checks; this does not prove the "
                            "computer is clean. Keep this result with the ticket.")
         add("Investigate", "If the user still reports a problem, collect a longer log and run it again.")
     else:

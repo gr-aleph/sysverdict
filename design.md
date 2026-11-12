@@ -46,15 +46,19 @@ Connection errors, timeouts, non-JSON replies and answers with an unexpected sha
 - **Streamlit:** the rest of the tool is Python, and Streamlit gives a local, private web app in the same
   language with upload, tabs and export built in, so the effort goes into the detection logic.
 - **Verdict from named findings, not a numeric score:** a list of findings with their events tells the analyst what to do and can be verified.
-- **High and low confidence:** one high-confidence finding means Malicious; low-confidence findings alone only mean Suspicious, so normal installers do not raise false alarms.
-- **Short, readable checks:** each check is one function that can be reviewed on its own; they target common attacker behaviour, not every technique.
+- **High or low confidence by one question: does the action have a common legitimate use?** No (password theft, download-and-run, clearing logs, UAC bypass) = high = Malicious; yes (admin tools, new accounts, Run keys, Windows-tool downloads) = low = Suspicious, however many there are.
+- **Checks come from gaps in ATT&CK tactic coverage, not from sample logs:** test logs are only used afterwards as an exam, so the rules are not tuned to them.
+- **Actions are judged by what they do, not by who typed them:** an attacker with a stolen admin account types the same commands as the admin.
+- **Encoded PowerShell is decoded and judged by its content:** monitoring agents encode commands too; encoding alone is not a finding.
+- **Short, readable checks:** each check is one function (or one list of commented patterns) that can be reviewed on its own; they target common attacker behaviour, not every technique.
 - **Small known-good list (`data/known_good.txt`):** keeps common software in user folders from being flagged; kept short because each entry is a place malware could hide.
 - **Services installed in Program Files are trusted:** legitimate installers create services there constantly; services dropped elsewhere are flagged.
-- **Discovery commands typed by a person are ignored:** recon launched from an interactive shell is normal administration.
+- **Discovery commands typed by a person are ignored:** recon from the desktop or a remote admin session (WinRM) is normal help-desk work; recon started by a program is not.
 - **Delivery is reconstructed from the log, not guessed:** the browser download record, parent process and UAC prompt explain how the first file arrived; anything missing is stated as "not in this log", and no ATT&CK technique is claimed that the log cannot prove.
 - **MITRE ATT&CK tags and NIST phases:** standard vocabulary analysts and their tools already use.
 - **IOCs only for flagged programs:** keeps the list actionable and protects the enrichment sources' rate limits.
-- **Enrichment on demand, capped per run and cached:** at most 4 new hashes (VirusTotal free tier), 20 new IPs and 20 new domains per run; nothing leaves by accident; errors are never cached.
+- **Enrichment on demand, capped per run and cached:** nothing leaves by accident, the free-tier limits of the sources are respected (caps in `enrich.py`), and errors are never cached.
+- **Passwords are hidden as soon as an event is read:** no tab, export or raw-event view can show one.
 - **Enrichment can raise the verdict, never lower it:** "no known bad" from a source is absence of evidence and does not cancel a finding.
 - **Addresses are shown exactly but never as links:** the page renders URLs, domains and IPs as code text so nobody opens an attacker's site by accident.
 - **An indented process tree, not a graph drawing:** a fixed layout cannot overlap and reads top to bottom like an EDR process view.
@@ -70,3 +74,5 @@ Connection errors, timeouts, non-JSON replies and answers with an unexpected sha
 - One log covers one computer and one incident window; machine-to-machine movement is shown only as connections from this computer.
 - Parents that started before the log began appear without details.
 - The lookalike check covers only the brands in `data/brands.txt`.
+- Not used yet: time of day (off-hours activity needs each client's working hours), file signatures
+  (Sysmon event 7 is often not collected), and Windows Security logs.

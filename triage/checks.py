@@ -16,6 +16,7 @@ The verdict comes only from the findings (and optionally enrichment), so the sam
 always gives the same answer, and every answer can be traced to its events.
 """
 
+import base64
 import ipaddress
 import re
 from pathlib import Path
@@ -49,6 +50,9 @@ SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe",
 RECON_TOOLS = {"whoami.exe", "ipconfig.exe", "systeminfo.exe", "net.exe", "net1.exe",
                "nltest.exe", "quser.exe", "hostname.exe", "tasklist.exe", "arp.exe",
                "netstat.exe", "route.exe", "nslookup.exe"}
+# Programs that mean "a person at the keyboard": the desktop, and a remote admin session over
+# WinRM (wsmprovhost.exe hosts PowerShell remoting). Recon typed by a person is normal help-desk work.
+PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe"}
 BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "iexplore.exe", "brave.exe",
             "opera.exe", "msedgewebview2.exe"}
 # Real Windows programs that should only ever run from the Windows folder.
@@ -72,23 +76,24 @@ TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
 # File endings a ransom note uses (a text or web page the victim is meant to open).
 NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
 
-# PowerShell command-line patterns used to hide or download code. Each one is a regular
-# expression, searched in the lower-case command line. Reading guide:
-#   \s = a space   [a-z]* = any letters   + = one or more   {40,} = 40 or more
-#   | = "or"       \b = a word edge (so "iex" does not match inside "index")   ? = optional
-SUSPICIOUS_POWERSHELL = [
-    # "-enc" / "-e" / "-encodedcommand" followed by 40+ base64 characters (hidden script).
-    r"\s-e[a-z]*\s+[a-z0-9+/=]{40,}",
-    # Decoding base64 text inside the script.
-    r"frombase64string",
-    # Downloading text or a file from the internet.
-    r"downloadstring|downloadfile|downloaddata",
-    # Other download methods: Invoke-WebRequest (alias iwr), the WebClient class, BITS.
-    r"invoke-webrequest|\biwr\b|net\.webclient|start-bitstransfer",
-    # Running text as code: Invoke-Expression (alias iex).
-    r"\biex\b|invoke-expression",
-]
-# A hidden window alone is not on this list: management agents and scheduled scripts use it too.
+# PowerShell is judged by what the command DOES, after decoding an encoded command.
+# Encoding alone is not a finding: monitoring agents and admins encode commands too.
+# Reading guide for the regular expressions below:
+#   \s = a space   [a-z]* = any letters   + = one or more   {20,} = 20 or more
+#   | = "or"       \b = a word edge (so "iex" does not match inside "index")   ( ) = the part we keep
+
+# "-enc" / "-e" / "-EncodedCommand" followed by base64 text (the hidden command), e.g.
+# "powershell -EncodedCommand aQB3AHIA...". Group 1 is the base64 text.
+ENCODED_COMMAND = re.compile(r"\s-e[a-z]*\s+([a-z0-9+/=]{20,})", re.IGNORECASE)
+# Downloading text or a file from the internet: the WebClient methods, Invoke-WebRequest
+# (alias iwr), Invoke-RestMethod (alias irm), BITS.
+PS_DOWNLOAD = re.compile(r"downloadstring|downloadfile|downloaddata|net\.webclient|invoke-webrequest|"
+                         r"\biwr\b|invoke-restmethod|\birm\b|start-bitstransfer")
+# Running text as code: Invoke-Expression (alias iex).
+PS_RUN_TEXT = re.compile(r"\biex\b|invoke-expression")
+# Turning base64 text back into code inside the script.
+PS_DECODE = re.compile(r"frombase64string")
+# A hidden window alone is not a sign: management agents and scheduled scripts use it too.
 
 # A file name with a fake document ending before a program ending, e.g. "invoice.pdf.exe".
 # Part 1 is the fake ending (docx? = doc or docx, jpe?g = jpg or jpeg); part 2 is the real
@@ -192,7 +197,7 @@ def events_of(events, event_id):
     return [e for e in events if e["event_id"] == event_id]
 
 
-# ---------- the 10 checks ----------
+# ---------- the checks (each one is listed in ALL_CHECKS at the end) ----------
 
 def check_document_app_spawns_program(events, context):
     """Strong: Word, Excel, WordPad, a PDF reader... starts a shell or a program from a user folder."""
@@ -209,18 +214,43 @@ def check_document_app_spawns_program(events, context):
     return list(found.values())
 
 
+def decode_powershell(command):
+    """The hidden command of 'powershell -EncodedCommand <base64>' as readable text, or "".
+    PowerShell's base64 holds UTF-16 text (2 bytes per letter)."""
+    match = ENCODED_COMMAND.search(command)
+    if not match:
+        return ""
+    text = match.group(1)
+    text += "=" * (-len(text) % 4)  # base64 length must be a multiple of 4
+    try:
+        return base64.b64decode(text).decode("utf-16-le", errors="replace")
+    except ValueError:  # not real base64
+        return ""
+
+
 def check_suspicious_powershell(events, context):
-    """Strong: PowerShell with encoded commands, downloads or running text as code."""
+    """Strong: PowerShell downloads code AND runs it (or runs hidden decoded code).
+    Weak: PowerShell only downloads, only runs text as code, or only decodes base64.
+    The command is judged after decoding an encoded command; encoding alone is no finding."""
     found = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) not in ("powershell.exe", "pwsh.exe"):
             continue
-        command = e.get("CommandLine", "").lower()
-        hits = [p for p in SUSPICIOUS_POWERSHELL if re.search(p, command)]
-        if hits:
-            add_finding(found, e.get("ProcessGuid"), e, "suspicious_powershell",
-                        "Encoded or downloading PowerShell", "Strong", e.get("Image", ""),
-                        "command line: " + e.get("CommandLine", "")[:200], e.get("ProcessGuid", ""))
+        command = e.get("CommandLine", "")
+        decoded = decode_powershell(command)
+        everything = (command + " " + decoded).lower()
+        downloads = bool(PS_DOWNLOAD.search(everything))
+        runs_text = bool(PS_RUN_TEXT.search(everything))
+        decodes = bool(PS_DECODE.search(everything))
+        if runs_text and (downloads or decodes):
+            strength, title = "Strong", "PowerShell downloaded and ran code"
+        elif downloads or runs_text or decodes:
+            strength, title = "Weak", "PowerShell download or hidden code"
+        else:
+            continue  # e.g. an encoded command that only reads a CPU counter
+        shown = "decoded command: " + decoded if decoded else "command line: " + command
+        add_finding(found, e.get("ProcessGuid"), e, "suspicious_powershell", title, strength,
+                    e.get("Image", ""), shown[:200], e.get("ProcessGuid", ""))
     return list(found.values())
 
 
@@ -260,8 +290,8 @@ def check_recon_burst(events, context):
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in RECON_TOOLS:
             guid, image = find_launcher(e, context["processes"])
-            if file_name(image) == "explorer.exe":
-                continue  # a person typing in a command window, not a program
+            if file_name(image) in PERSON_PROGRAMS:
+                continue  # a person typing (locally or in a remote admin session), not a program
             by_launcher.setdefault((guid, image), []).append(e)
 
     found = {}
@@ -317,8 +347,9 @@ def check_lookalike_domain(events, context):
 
 
 def check_persistence(events, context):
-    """Strong: a Run key or new service that starts a file from a user folder, or a service
-    whose program was dropped during this log outside Program Files."""
+    """Strong: a Run key that starts a user-folder DLL with rundll32/regsvr32, or a service whose
+    program is in a user folder or was dropped during this log outside Program Files.
+    Weak: a Run key that starts a program from a user folder (tray apps do this too)."""
     found = {}
     for e in events_of(events, 13):
         target = e.get("TargetObject", "")
@@ -331,10 +362,18 @@ def check_persistence(events, context):
         # A Run or RunOnce registry key, e.g. ...\Microsoft\Windows\CurrentVersion\Run\FireEye.
         # (\\ is one backslash; (once)? means "Once" may follow "Run".)
         if re.search(r"\\currentversion\\run(once)?\\", target, re.IGNORECASE):
-            if in_user_folder(writer) or in_user_folder(value_path):
+            detail = f"{file_name(writer)} set {target.split(chr(92))[-1]} = {value[:150]}"
+            # rundll32/regsvr32 starting a DLL from a user folder at every logon: no common
+            # legitimate use, so Strong. A program in a user folder: tray apps (Discord, Zoom)
+            # do this too, so Weak.
+            starts_user_dll = (file_name(value_path) in ("rundll32.exe", "regsvr32.exe")
+                               and ".dll" in value.lower() and in_user_folder(value))
+            if starts_user_dll:
+                add_finding(found, target.lower(), e, "persistence", "Starts a DLL at logon (Run key)",
+                            "Strong", writer, detail, e.get("ProcessGuid", ""))
+            elif in_user_folder(writer) or in_user_folder(value_path):
                 add_finding(found, target.lower(), e, "persistence", "Starts itself at logon (Run key)",
-                            "Strong", writer, f"{file_name(writer)} set {target.split(chr(92))[-1]} "
-                            f"= {value[:150]}", e.get("ProcessGuid", ""))
+                            "Weak", writer, detail, e.get("ProcessGuid", ""))
         # The program path of a Windows service: ...\Services\<service name>\ImagePath.
         # ([^\\]+ is the service name: one or more characters that are not a backslash.)
         elif re.search(r"\\services\\[^\\]+\\imagepath$", target, re.IGNORECASE):
@@ -403,6 +442,255 @@ def check_network_from_user_folder(events, context):
     return list(found.values())
 
 
+# ---------- command-line checks (one list of patterns per check) ----------
+# Each rule is (pattern, what it means, ATT&CK tactic, ATT&CK technique). The patterns are searched
+# in a program's command line, ignoring upper/lower case. Reading guide for the patterns:
+#   \b = a word edge   \s = a space   \S = not a space   .* = anything   (x)? = x is optional
+#   \\\\ = the two backslashes of a network path (\\server)   [a-z0-9._-]+ = a computer name
+#   (a|b) = a or b   \"? = an optional quote (paths are often written in quotes)
+
+def rule(pattern, what, tactic, technique):
+    return re.compile(pattern, re.IGNORECASE), what, tactic, technique
+
+
+# Running commands on another computer. Admins do this every day, so these are Weak.
+REMOTE_EXECUTION_RULES = [
+    # PsExec / PaExec followed by a computer: "PsExec64.exe \\SRV-01 cmd"
+    rule(r"\b(ps|pa)exec(64)?(\.exe)?\"?\s.*\\\\[a-z0-9._-]+", "runs a program on another computer with PsExec",
+         "Lateral Movement", "T1021.002 SMB/Windows Admin Shares"),
+    # WMI on another computer: "wmic /node:SRV-01 process call create ..."
+    rule(r"\bwmic(\.exe)?\b.*\s/node:", "runs a command on another computer with WMI",
+         "Execution", "T1047 Windows Management Instrumentation"),
+    # Windows Remote Shell: "winrs -r:SRV-01 cmd"
+    rule(r"\bwinrs(\.exe)?\b.*\s[-/]r(emote)?:", "runs a command on another computer with WinRS",
+         "Lateral Movement", "T1021.006 Windows Remote Management"),
+    # PowerShell remoting: Invoke-Command -ComputerName ..., Enter-PSSession, New-PSSession
+    rule(r"invoke-command\b.*-computername|enter-pssession|new-pssession",
+         "runs PowerShell on another computer", "Lateral Movement", "T1021.006 Windows Remote Management"),
+    # A scheduled task or service on another computer: "schtasks /create /s SRV-01 ...", "sc \\SRV-01 create"
+    rule(r"\bschtasks(\.exe)?\b.*\s/s\s+\S", "creates or changes a scheduled task on another computer",
+         "Lateral Movement", "T1053.005 Scheduled Task"),
+    rule(r"\bsc(\.exe)?\"?\s+\\\\[a-z0-9._-]+", "creates or changes a service on another computer",
+         "Lateral Movement", "T1569.002 Service Execution"),
+    # An admin share: \\SRV-01\C$ or \\SRV-01\ADMIN$ (copying tools there, or "net use" to it)
+    rule(r"\\\\[a-z0-9._-]+\\([a-z]|admin)\$", "uses an administrative share on another computer",
+         "Lateral Movement", "T1570 Lateral Tool Transfer"),
+]
+
+# Creating accounts, giving admin rights, opening the firewall. Admins do this too: Weak.
+ACCESS_CHANGE_RULES = [
+    # "net user helpdesk **** /add" (net1.exe is the same tool)
+    rule(r"\bnet1?(\.exe)?\"?\s+user\s+\S+.*\s/add\b", "creates a user account",
+         "Persistence", "T1136.001 Local Account"),
+    # "net localgroup Administrators helpdesk /add", also Domain Admins and Remote Desktop Users
+    rule(r"\bnet1?(\.exe)?\"?\s+(localgroup|group)\s+\"?(administrators|domain admins|enterprise admins|"
+         r"remote desktop users)\"?\s+\S+.*\s/add\b", "adds an account to a privileged group",
+         "Persistence", "T1098 Account Manipulation"),
+    # The same with PowerShell: New-LocalUser, Add-LocalGroupMember -Group Administrators
+    rule(r"new-localuser\b", "creates a user account", "Persistence", "T1136.001 Local Account"),
+    rule(r"add-localgroupmember\b.*(administrators|remote desktop users)", "adds an account to a privileged group",
+         "Persistence", "T1098 Account Manipulation"),
+    # "netsh advfirewall firewall set rule ... enable=yes", "netsh firewall add ..."
+    rule(r"\bnetsh(\.exe)?\b.*\bfirewall\b.*\b(add|set|delete)\b", "changes the Windows firewall",
+         "Defense Evasion", "T1562.004 Disable or Modify System Firewall"),
+]
+
+# A new scheduled task (it runs again later, often as SYSTEM). Many admin and update tools do
+# this too: Weak.
+SCHEDULED_TASK_RULES = [
+    rule(r"\bschtasks(\.exe)?\b.*\s/create\b", "creates a scheduled task", "Persistence", "T1053.005 Scheduled Task"),
+    rule(r"register-scheduledtask\b", "creates a scheduled task", "Persistence", "T1053.005 Scheduled Task"),
+]
+
+# Windows programs that are not download tools but can be misused to download files
+# ("living off the land"). curl.exe is a real download tool, so it is not on this list. Weak.
+TOOL_DOWNLOAD_RULES = [
+    # "certutil -urlcache -split -f http://.../a.dat a.dat", "certutil -decode in.txt out.exe"
+    rule(r"\bcertutil(\.exe)?\b.*\s[-/](urlcache|verifyctl)\b", "downloads a file with certutil",
+         "Command and Control", "T1105 Ingress Tool Transfer"),
+    rule(r"\bcertutil(\.exe)?\b.*\s[-/]decode\b", "decodes a file with certutil",
+         "Defense Evasion", "T1140 Deobfuscate/Decode Files or Information"),
+    # "bitsadmin /transfer job http://.../a.exe C:\a.exe"
+    rule(r"\bbitsadmin(\.exe)?\b.*\s/(transfer|addfile|download)\b", "downloads a file with bitsadmin",
+         "Command and Control", "T1105 Ingress Tool Transfer"),
+    # "mshta http://.../page.hta" (runs a web page as a program)
+    rule(r"\bmshta(\.exe)?\"?\s+\"?https?://", "runs a web page with mshta",
+         "Defense Evasion", "T1218.005 Mshta"),
+    # "regsvr32 /s /u /i:http://.../file.sct scrobj.dll"
+    rule(r"\bregsvr32(\.exe)?\b.*\s/i:\"?https?://", "runs a script from the internet with regsvr32",
+         "Defense Evasion", "T1218.010 Regsvr32"),
+]
+
+
+def check_by_rules(events, check, title, strength, rules, skip_programs=()):
+    """Shared by the command-line checks: one finding per program and rule, with the rule's
+    own ATT&CK tag (so a PsExec line and a WMI line get different techniques).
+    Programs in skip_programs are never checked (e.g. a browser reading its own password store)."""
+    found = {}
+    for e in events_of(events, 1):
+        if file_name(e.get("Image")) in skip_programs:
+            continue
+        command = e.get("CommandLine", "")
+        for pattern, what, tactic, technique in rules:
+            if pattern.search(command):
+                key = (file_name(e.get("Image")), what)
+                add_finding(found, key, e, check, title, strength, e.get("Image", ""),
+                            f"{file_name(e.get('Image'))} {what}: {command[:180]}", e.get("ProcessGuid", ""))
+                found[key]["tactic"], found[key]["technique"] = tactic, technique
+                break  # one rule per command line is enough
+    return list(found.values())
+
+
+def check_remote_execution(events, context):
+    """Weak: a command run on another computer (PsExec, WMI, WinRS, remoting, admin shares)."""
+    return check_by_rules(events, "remote_execution", "Command run on another computer", "Weak",
+                          REMOTE_EXECUTION_RULES)
+
+
+def check_access_change(events, context):
+    """Weak: a new account, an account added to an admin group, or a firewall change."""
+    return check_by_rules(events, "access_change", "Account or firewall change", "Weak", ACCESS_CHANGE_RULES)
+
+
+def check_scheduled_task(events, context):
+    """Weak: a scheduled task was created."""
+    return check_by_rules(events, "scheduled_task", "Scheduled task created", "Weak", SCHEDULED_TASK_RULES)
+
+
+def check_tool_download(events, context):
+    """Weak: a Windows program that is not a download tool was used to download or decode a file."""
+    return check_by_rules(events, "tool_download", "Download with a Windows tool", "Weak", TOOL_DOWNLOAD_RULES)
+
+
+# Stealing saved passwords. No common legitimate use outside the browser itself: Strong.
+CREDENTIAL_THEFT_RULES = [
+    # Browser password and cookie stores: Chrome/Edge "...\User Data\Default\Login Data" (also
+    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite"
+    rule(r"\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b",
+         "reads a browser's saved passwords or cookies", "Credential Access",
+         "T1555.003 Credentials from Web Browsers"),
+    # Dumping LSASS memory with Windows' own comsvcs.dll: "rundll32 comsvcs.dll, MiniDump 624 d.dmp full"
+    rule(r"comsvcs(\.dll)?.*\b(minidump|#24)\b", "dumps LSASS memory with comsvcs.dll",
+         "Credential Access", "T1003.001 LSASS Memory"),
+    # "procdump -ma lsass.exe out.dmp"
+    rule(r"\bprocdump(64)?(\.exe)?\b.*\s-ma\b.*\blsass", "dumps LSASS memory with ProcDump",
+         "Credential Access", "T1003.001 LSASS Memory"),
+    # Saving the password databases from the registry: "reg save HKLM\SAM sam.hiv"
+    rule(r"\breg(\.exe)?\"?\s+(save|export)\s+\"?hklm\\(sam|security)\b",
+         "copies the Windows password database (SAM/SECURITY)", "Credential Access",
+         "T1003.002 Security Account Manager"),
+    # Copying the domain password database: "ntdsutil "ac i ntds" "ifm" "create full C:\x""
+    rule(r"\bntdsutil(\.exe)?\b.*\b(ifm|create full)\b", "copies the domain password database (NTDS)",
+         "Credential Access", "T1003.003 NTDS"),
+]
+
+# Switching off the evidence: event logs, the Sysmon sensor, shadow copies and recovery.
+# Not routine on a workstation: Strong.
+EVIDENCE_REMOVAL_RULES = [
+    # "wevtutil cl System", "wevtutil clear-log Security"
+    rule(r"\bwevtutil(\.exe)?\"?\s+(cl|clear-log)\b", "clears an event log",
+         "Defense Evasion", "T1070.001 Clear Windows Event Logs"),
+    rule(r"\b(clear-eventlog|remove-eventlog)\b", "clears an event log",
+         "Defense Evasion", "T1070.001 Clear Windows Event Logs"),
+    # "fltmc unload SysmonDrv" (removes a security driver), "sysmon64 -u", "sc stop Sysmon64"
+    rule(r"\bfltmc(\.exe)?\"?\s+unload\b", "unloads a security driver (e.g. Sysmon)",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"\bsysmon(64)?(\.exe)?\"?\s+-u\b", "uninstalls Sysmon", "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"\b(sc|net)(\.exe)?\"?\s+(stop|delete)\s+\"?sysmon", "stops Sysmon",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    # Deleting the backups ransomware does not want you to restore from
+    rule(r"\bvssadmin(\.exe)?\b.*\bdelete\s+shadows\b", "deletes shadow copies (backups)",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bwmic(\.exe)?\b.*\bshadowcopy\b.*\bdelete\b", "deletes shadow copies (backups)",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bwbadmin(\.exe)?\b.*\bdelete\s+(catalog|systemstatebackup)\b", "deletes Windows backups",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bbcdedit(\.exe)?\b.*\brecoveryenabled\s+no\b", "turns off Windows recovery",
+         "Impact", "T1490 Inhibit System Recovery"),
+]
+
+# Weakening Microsoft Defender. Admins sometimes add exclusions on purpose: Weak.
+DEFENDER_RULES = [
+    # "Set-MpPreference -DisableRealtimeMonitoring $true", "Add-MpPreference -ExclusionPath C:\x"
+    rule(r"set-mppreference\b.*\s-disable", "turns off part of Microsoft Defender",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"add-mppreference\b.*\s-exclusion", "adds a Microsoft Defender exclusion",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+]
+# The same in the registry, e.g. "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths\C:\x"
+# or "...\Policies\Microsoft\Windows Defender\DisableAntiSpyware" (.* = anything in between).
+DEFENDER_REGISTRY = re.compile(r"\\windows defender\\(exclusions\\|.*disable)", re.IGNORECASE)
+
+# The registry keys of known UAC bypasses: a program that Windows starts with admin rights
+# without asking (fodhelper.exe, eventvwr.exe) reads its "open" command from the user's own
+# registry, so writing that key gives admin rights silently. No legitimate use: Strong.
+UAC_BYPASS_KEY = re.compile(r"\\software\\classes\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
+
+
+def check_credential_theft(events, context):
+    """Strong: stealing saved passwords (browser stores, LSASS dumps, SAM/NTDS copies).
+    A browser reading its own files is skipped."""
+    return check_by_rules(events, "credential_theft", "Saved passwords stolen", "Strong",
+                          CREDENTIAL_THEFT_RULES, skip_programs=BROWSERS)
+
+
+def check_evidence_removal(events, context):
+    """Strong: event logs cleared, Sysmon switched off, backups or recovery deleted."""
+    return check_by_rules(events, "evidence_removal", "Logs, sensor or backups switched off", "Strong",
+                          EVIDENCE_REMOVAL_RULES)
+
+
+def check_defender_weakened(events, context):
+    """Weak: Microsoft Defender turned off in part, or an exclusion added (command line or registry)."""
+    found = {}
+    for f in check_by_rules(events, "defender_weakened", "Microsoft Defender weakened", "Weak", DEFENDER_RULES):
+        found[(f["process"].lower(), f["detail"])] = f
+    for e in events_of(events, 12) + events_of(events, 13):
+        target = e.get("TargetObject", "")
+        if not DEFENDER_REGISTRY.search(target):
+            continue
+        if file_name(e.get("Image")) == "msmpeng.exe":
+            continue  # Defender updating its own settings
+        if "disable" in target.lower() and e.get("Details", "").endswith("0x00000000)"):
+            continue  # a "Disable..." value set to 0 turns protection ON
+        add_finding(found, ("registry", target.lower()), e, "defender_weakened", "Microsoft Defender weakened",
+                    "Weak", e.get("Image", ""), f"{file_name(e.get('Image'))} changed {target[:180]}",
+                    e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+def check_uac_bypass(events, context):
+    """Strong: a known UAC-bypass registry key was written (silent admin rights)."""
+    found = {}
+    for e in events_of(events, 12) + events_of(events, 13):
+        target = e.get("TargetObject", "")
+        if UAC_BYPASS_KEY.search(target):
+            add_finding(found, target.lower(), e, "uac_bypass", "Admin rights taken without asking (UAC bypass)",
+                        "Strong", e.get("Image", ""),
+                        f"{file_name(e.get('Image'))} wrote {target[:150]} = {e.get('Details', '')[:120]}",
+                        e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# A DLL path in a command line, e.g. "C:\Users\a\AppData\Roaming\x\update.dll":
+# a drive letter, :\, then any characters except quotes and commas, up to ".dll".
+DLL_PATH = re.compile(r"[a-z]:\\[^\",]*?\.dll", re.IGNORECASE)
+
+
+def check_dll_from_user_folder(events, context):
+    """Weak: rundll32 or regsvr32 runs a DLL from a user folder (Downloads, AppData, Temp...)."""
+    found = {}
+    for e in events_of(events, 1):
+        if file_name(e.get("Image")) not in ("rundll32.exe", "regsvr32.exe"):
+            continue
+        for dll in DLL_PATH.findall(e.get("CommandLine", "")):
+            if in_user_folder(dll):
+                add_finding(found, dll.lower(), e, "dll_from_user_folder", "DLL run from a user folder", "Weak",
+                            e.get("Image", ""), f"{file_name(e.get('Image'))} ran {dll}", e.get("ProcessGuid", ""))
+                break
+    return list(found.values())
+
+
 ALL_CHECKS = [
     check_document_app_spawns_program,
     check_suspicious_powershell,
@@ -414,6 +702,15 @@ ALL_CHECKS = [
     check_ransom_note,
     check_run_from_user_folder,
     check_network_from_user_folder,
+    check_remote_execution,
+    check_access_change,
+    check_scheduled_task,
+    check_tool_download,
+    check_dll_from_user_folder,
+    check_credential_theft,
+    check_evidence_removal,
+    check_defender_weakened,
+    check_uac_bypass,
 ]
 
 
