@@ -79,10 +79,12 @@ st.markdown("""
   .htable {max-height: 640px; overflow-y: auto; border: 1px solid #2A3440; border-radius: 6px; margin-bottom: 1rem;}
   .htable table {width: 100%; border-collapse: collapse; font-size: .9rem;}
   .htable th {position: sticky; top: 0; background: #1A2129; text-align: left; padding: .5rem .7rem;
-              color: #8B96A3; font-weight: 600; border-bottom: 1px solid #2A3440; white-space: nowrap;}
+              color: #8B96A3; font-weight: 600; border-bottom: 1px solid #2A3440; white-space: normal;}
   .htable td {padding: .45rem .7rem; border-bottom: 1px solid #1E262F; vertical-align: top;
               white-space: normal; overflow-wrap: anywhere;}
   .htable td.short {white-space: nowrap; font-family: "IBM Plex Mono", monospace; font-size: .8rem; color: #8B96A3;}
+  /* Narrow columns take a fixed share of the table and wrap between words; the rest goes to the long column. */
+  .htable td.narrow {width: 17%; font-size: .8rem; overflow-wrap: normal;}
   .dot {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .45rem;}
   .up {background: #3DB39E;} .down {background: #E5484D;} .off {background: #5B6B7C;}
 </style>
@@ -95,10 +97,11 @@ def esc(text):
     return story.code_addresses(html.escape(str(text), quote=False))
 
 
-def html_table(rows, short_columns=()):
+def html_table(rows, short_columns=(), narrow_columns=()):
     """Draw a list of row dicts as a plain HTML table whose long values wrap, so nothing is cut
-    (st.dataframe cuts long hashes and paths). Columns named in short_columns stay on one line.
-    Raw HTML is never turned into links, so addresses are shown as-is but cannot be clicked."""
+    (st.dataframe cuts long hashes and paths). Columns named in short_columns stay on one line;
+    columns in narrow_columns get a fixed narrow width and wrap. A "\\n" in a value starts a new
+    line in the cell. Raw HTML is never turned into links, so addresses cannot be clicked."""
     if not rows:
         return
     header = "".join(f"<th>{html.escape(name)}</th>" for name in rows[0])
@@ -106,8 +109,13 @@ def html_table(rows, short_columns=()):
     for row in rows:
         cells = ""
         for name, value in row.items():
-            css = ' class="short"' if name in short_columns else ""
-            cells += f"<td{css}>{html.escape(str(value))}</td>"
+            css = ""
+            if name in short_columns:
+                css = ' class="short"'
+            elif name in narrow_columns:
+                css = ' class="narrow"'
+            # Escape first (so log text cannot inject HTML), then turn line breaks into <br>.
+            cells += f"<td{css}>{html.escape(str(value)).replace(chr(10), '<br>')}</td>"
         body += f"<tr>{cells}</tr>"
     st.markdown(f'<div class="htable"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>',
                 unsafe_allow_html=True)
@@ -404,6 +412,27 @@ with tabs[3]:
 
 # ---------- Timeline ----------
 
+def stack_timeline_row(row):
+    """A copy of one Timeline row for the page, with short values on two lines so the Event
+    column gets the room:
+      '2023-12-13 10:53:32'                               -> '2023-12-13' / '10:53:32'
+      '1 – Process Create'                                -> '1' / 'Process Create'
+      'Execution · T1204.002 User Execution: Malicious File' -> 'T1204.002' / 'Execution · User Execution: ...'
+    The CSV export keeps the original one-line values."""
+    time_name = list(row)[0]  # "Time (UTC)" or "Local time"
+    event_number, event_name = row["Sysmon Event ID"].split(" – ", 1)
+    tag = row["MITRE ATT&CK"]
+    if " · " in tag:  # tactic and technique: put the technique code on top
+        tactic, technique = tag.split(" · ", 1)
+        code, technique_name = technique.split(" ", 1)
+        tag = f"{code}\n{tactic} · {technique_name}"
+    return {time_name: row[time_name].replace(" ", "\n"),
+            "Sysmon Event ID": f"{event_number}\n{event_name}",
+            "MITRE ATT&CK": tag,
+            "Event": row["Event"],
+            "Event #": row["Event #"]}
+
+
 with tabs[4]:
     # Only the events that lead to the incident (the events behind the attack story).
     rows = story.story_rows(events, steps, zone)
@@ -412,7 +441,9 @@ with tabs[4]:
     else:
         st.caption(f"{len(rows):,} incident events. {time_note}. "
                    "The Sysmon Event ID can be searched as-is in any SIEM.")
-        html_table(rows, short_columns=(list(rows[0])[0], "Sysmon Event ID", "Event #"))
+        html_table([stack_timeline_row(r) for r in rows],
+                   short_columns=(list(rows[0])[0], "Event #"),
+                   narrow_columns=("Sysmon Event ID", "MITRE ATT&CK"))
 
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
@@ -438,6 +469,7 @@ with tabs[5]:
     chosen = st.multiselect("Show", labels, default=[l for l in labels if l != "internal name"])
     shown = [r for r in domain_rows if r["label"] in chosen]
     time_column = "Time (UTC)" if zone is None else "Local time"
-    html_table([{time_column: f"{in_zone(r['time'], zone):%Y-%m-%d %H:%M:%S}", "Domain": r["domain"],
+    # Date above time ("\n"), like the Timeline, so the Domain column gets the room.
+    html_table([{time_column: f"{in_zone(r['time'], zone):%Y-%m-%d\n%H:%M:%S}", "Domain": r["domain"],
                  "Label": r["label"], "Program": r["program"], "Event #": r["event_id"]} for r in shown],
                short_columns=(time_column, "Event #"))
