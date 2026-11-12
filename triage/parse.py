@@ -51,12 +51,19 @@ NET_USE_PASSWORD = re.compile(
     r"(\bnet1?(?:\.exe)?\s+use\s+(?:[a-z]:\s+)?\\\\\S+\s+)(?!/)(\"[^\"]*\"|\S+)",
     re.IGNORECASE)
 
+# 4. "net user helpdesk Secret1 /add": the word after the user name is the password.
+#    \"? allows "net.exe" in quotes; (?!/) means the user name is not an option such as /domain;
+#    (?![/*]) means the next word is not an option (/add) and not * (= ask for the password).
+NET_USER_PASSWORD = re.compile(
+    r"(\bnet1?(?:\.exe)?\"?\s+user\s+(?!/)(?:\"[^\"]*\"|\S+)\s+)(?![/*])(\"[^\"]*\"|\S+)",
+    re.IGNORECASE)
+
 
 def hide_secrets(text):
     """Replace passwords in a command line or value by ****:
     'net use \\\\pc\\c$ Secret1 /user:admin' -> 'net use \\\\pc\\c$ **** /user:admin'.
     Limit: a password written as a plain word with no option name in front cannot be recognised."""
-    for pattern in (PASSWORD_OPTION, PASSWORD_SETTING, NET_USE_PASSWORD):
+    for pattern in (PASSWORD_OPTION, PASSWORD_SETTING, NET_USE_PASSWORD, NET_USER_PASSWORD):
         text = pattern.sub(lambda match: match.group(1) + HIDDEN, text)
     return text
 

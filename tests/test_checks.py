@@ -95,6 +95,12 @@ def test_passwords_are_hidden():
     assert hide("New-Thing -Password 'Secret 1' -Force") == "New-Thing -Password **** -Force"
     assert hide('schtasks /create /tn T /ru admin /rp "Secret 1"') == "schtasks /create /tn T /ru admin /rp ****"
     assert hide("Server=db01;Database=x;Pwd=Secret1;") == "Server=db01;Database=x;Pwd=****;"
+    assert hide("net user helpdesk Winter#26 /add") == "net user helpdesk **** /add"
+    assert hide('"C:\\Windows\\System32\\net.exe" user "help desk" Secret1') == \
+        '"C:\\Windows\\System32\\net.exe" user "help desk" ****'
+    for text in ["net user helpdesk /add", "net user helpdesk * /add", "net user /domain",
+                 "net user helpdesk", "net user"]:  # no password written: nothing to hide
+        assert hide(text) == text, text
     # Normal command lines are left alone.
     for text in ["powershell.exe -enc SQBFAFgA", "C:\\Program Files\\App\\app.exe /S", "whoami /priv",
                  "C:\\Windows\\system32\\svchost.exe -k netsvcs -p -s Schedule",  # -p without a value
