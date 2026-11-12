@@ -20,6 +20,7 @@ How it is built:
 import re
 
 from triage.checks import BROWSERS, file_name, is_windows_program
+from triage.iocs import FILE_IN_TEXT
 from triage.parse import to_datetime
 from triage.timeline import event_label, in_zone, time_column
 
@@ -97,6 +98,23 @@ ATTACK_TAGS = {
     "ransom_note": ("Impact", "T1486 Data Encrypted for Impact"),
     "run_from_user_folder": ("Execution", "T1204.002 User Execution: Malicious File"),
     "network_from_user_folder": ("Command and Control", "T1071.001 Web Protocols"),
+}
+
+# A recon burst is tagged by the discovery tool that ran first (other tools: T1033 above).
+RECON_TECHNIQUES = {
+    "whoami.exe": "T1033 System Owner/User Discovery",
+    "quser.exe": "T1033 System Owner/User Discovery",
+    "ipconfig.exe": "T1016 System Network Configuration Discovery",
+    "route.exe": "T1016 System Network Configuration Discovery",
+    "arp.exe": "T1016 System Network Configuration Discovery",
+    "nslookup.exe": "T1016 System Network Configuration Discovery",
+    "netstat.exe": "T1049 System Network Connections Discovery",
+    "systeminfo.exe": "T1082 System Information Discovery",
+    "hostname.exe": "T1082 System Information Discovery",
+    "net.exe": "T1087 Account Discovery",
+    "net1.exe": "T1087 Account Discovery",
+    "nltest.exe": "T1087 Account Discovery",
+    "tasklist.exe": "T1057 Process Discovery",
 }
 
 # One plain sentence per check. {detail} and {process} come from the finding.
@@ -197,9 +215,14 @@ def find_delivery(events, findings):
     delivered, opener = root.get("Image", ""), root
     if parent_name in {"winword.exe", "excel.exe", "powerpnt.exe", "wordpad.exe", "acrord32.exe",
                        "acrobat.exe", "onenote.exe", "foxitpdfreader.exe"} and parent:
-        documents = [part.strip('"') for part in parent.get("CommandLine", "").split('" "')[1:]]
+        # The document is the last file path in the document program's command line, e.g.
+        # WINWORD.EXE /n "C:\...\invoice.docm" /o "" -> invoice.docm. Program paths are skipped.
+        documents = []
+        for path in FILE_IN_TEXT.findall(parent.get("CommandLine", "")):
+            if not path.lower().endswith(".exe"):
+                documents.append(path)
         if documents:
-            delivered, opener = documents[-1].strip('"'), parent
+            delivered, opener = documents[-1], parent
     opener_parent = file_name(opener.get("ParentImage"))
     name = display_name(delivered)
     steps = []
@@ -219,8 +242,9 @@ def find_delivery(events, findings):
         if not looked_up:
             text += (". How the user reached that site (a link, a search, an ad or an email) is not "
                      "in this log")
-        steps.append({"time": origin["event"]["time"], "tactic": "Initial Access",
-                      "technique": "T1189 Drive-by Compromise (download from a malicious site)",
+        # No technique: how the user reached the site (link, search, ad, email) is not in the log,
+        # and a referrer page alone does not prove phishing.
+        steps.append({"time": origin["event"]["time"], "tactic": "Initial Access", "technique": "",
                       "text": text + ".", "technical": f"{event_label(15)} · Zone.Identifier of {delivered}",
                       "event_ids": [origin["event"]["record_id"]], "guid": "", "image": lower,
                       "confidence": "", "kind": "origin"})
@@ -231,9 +255,10 @@ def find_delivery(events, findings):
                       "event_ids": [opener["record_id"]], "guid": "", "image": lower,
                       "confidence": "", "kind": "origin"})
     elif len(lower) > 1 and lower[1] == ":" and not lower.startswith("c:"):
-        steps.append({"time": opener["time"], "tactic": "Initial Access",
-                      "technique": "T1091 Replication Through Removable Media",
-                      "text": f"{name} was started from drive {delivered[:2]} (a USB or network drive).",
+        # No technique: the log cannot tell a USB stick from a network drive.
+        steps.append({"time": opener["time"], "tactic": "Initial Access", "technique": "",
+                      "text": f"{name} was started from drive {delivered[:2].upper()} "
+                              "(possibly a USB or network drive).",
                       "technical": delivered, "event_ids": [opener["record_id"]], "guid": "",
                       "image": lower, "confidence": "", "kind": "origin"})
     else:
@@ -279,7 +304,9 @@ def finding_step(f, events_by_id):
     tactic, technique = ATTACK_TAGS[key]
     if f["check"] == "lookalike_domain" and f["strength"] == "Weak":
         tactic, technique = "Initial Access", "T1566.002 Spearphishing Link (possible)"
-    first = events_by_id[f["event_ids"][0]]
+    first = events_by_id[f["event_ids"][0]]  # the finding's earliest event
+    if f["check"] == "recon_burst":
+        technique = RECON_TECHNIQUES.get(file_name(first.get("Image")), technique)
     text = SENTENCES[key].format(detail=f["detail"], process=display_name(f["process"]))
     if f["check"] == "run_from_user_folder" and first.get("ParentImage"):
         starter = display_name(first["ParentImage"])
@@ -501,7 +528,8 @@ def next_steps(findings, verdict, steps=()):
             plan[phase].append(text)
 
     if verdict["label"] == "Benign":
-        add("Investigate", "No action needed. Keep this report with the ticket in case new information comes in.")
+        add("Investigate", "Nothing known-bad was found by the 10 checks; this does not prove the "
+                           "computer is clean. Keep this result with the ticket.")
         add("Investigate", "If the user still reports a problem, collect a longer log and run it again.")
     else:
         strong_checks = {f["check"] for f in findings if f["strength"] == "Strong"}

@@ -28,7 +28,8 @@ def recon_chain(program, parent="C:\\Windows\\explorer.exe"):
 def test_browser_download_with_referrer_uac_and_double_click():
     steps = steps_of(attack_events())
     origin, execution = steps[0], steps[1]
-    assert origin["tactic"] == "Initial Access" and origin["technique"].startswith("T1189")
+    # No technique: the referrer page alone does not show how the user got there.
+    assert origin["tactic"] == "Initial Access" and origin["technique"] == ""
     assert "with Edge from https://www.fireeyee.com/download/FireEyeInstaller.exe" in origin["text"]
     assert "from the page https://www.fireeyee.com/" in origin["text"]
     assert "How the user reached that site" in origin["text"]  # no DNS lookup for it in the log
@@ -47,6 +48,44 @@ def test_unknown_origin_is_said_plainly():
     origin = steps_of(recon_chain(USER + "\\Desktop\\tool.exe"))[0]
     assert origin["technique"] == ""
     assert "not in this log" in origin["text"]
+
+
+def test_document_name_is_read_from_the_word_command_line():
+    word = "C:\\Program Files\\Microsoft Office\\Root\\Office16\\WINWORD.EXE"
+    events = [
+        event(1, 1, "2026-01-05 10:00:00.000", ProcessGuid="{word}", ParentProcessGuid="{explorer}",
+              Image=word, ParentImage="C:\\Windows\\explorer.exe",
+              CommandLine=f'"{word}" /n "C:\\Users\\a\\Downloads\\invoice.docm" /o ""'),
+        event(2, 1, "2026-01-05 10:00:05.000", ProcessGuid="{cmd}", ParentProcessGuid="{word}",
+              Image="C:\\Windows\\System32\\cmd.exe", ParentImage=word, CommandLine="cmd.exe /c whoami"),
+    ]
+    assert "invoice.docm" in steps_of(events)[0]["text"]
+
+
+def test_other_drive_has_no_technique():
+    origin = steps_of(recon_chain("D:\\setup.exe"))[0]
+    assert origin["text"] == "setup.exe was started from drive D: (possibly a USB or network drive)."
+    assert origin["technique"] == ""
+
+
+def test_recon_technique_follows_the_first_tool():
+    def recon_technique(first_tool, second_tool):
+        program = USER + "\\Downloads\\tool.exe"
+        events = [
+            event(1, 1, "2026-01-05 10:00:00.000", ProcessGuid="{x}", ParentProcessGuid="{p}",
+                  Image=program, ParentImage="C:\\Windows\\explorer.exe", CommandLine=f'"{program}"'),
+            event(2, 1, "2026-01-05 10:00:01.000", ProcessGuid="{t1}", ParentProcessGuid="{x}",
+                  Image=f"C:\\Windows\\System32\\{first_tool}", ParentImage=program),
+            event(3, 1, "2026-01-05 10:00:02.000", ProcessGuid="{t2}", ParentProcessGuid="{x}",
+                  Image=f"C:\\Windows\\System32\\{second_tool}", ParentImage=program),
+        ]
+        recon = [s for s in steps_of(events) if s.get("check") == "recon_burst"]
+        return recon[0]["technique"]
+
+    assert recon_technique("ipconfig.exe", "whoami.exe") == "T1016 System Network Configuration Discovery"
+    assert recon_technique("whoami.exe", "ipconfig.exe") == "T1033 System Owner/User Discovery"
+    assert recon_technique("tasklist.exe", "whoami.exe") == "T1057 Process Discovery"
+    assert recon_technique("nltest.exe", "whoami.exe") == "T1087 Account Discovery"
 
 
 def test_document_from_the_browser():
@@ -127,4 +166,5 @@ def test_next_steps_use_nist_phases():
 def test_benign_next_steps_are_investigate_only():
     plan = story.next_steps([], make_verdict([]))
     assert list(plan) == ["Investigate"]
-    assert plan["Investigate"][0].startswith("No action needed")
+    assert plan["Investigate"][0].startswith("Nothing known-bad was found by the 10 checks; "
+                                             "this does not prove the computer is clean.")
