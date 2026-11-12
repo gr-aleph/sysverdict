@@ -16,6 +16,7 @@ How it is built:
   3. sort them by time and number them 1, 2, 3, ...
 """
 
+import html
 import re
 
 from triage.checks import BROWSERS, file_name, is_windows_program
@@ -62,6 +63,26 @@ def code_addresses(text):
             return token
         return f"<code>{token}</code>"
     return ADDRESS.sub(wrap, text)
+
+
+# Characters that Markdown (and Streamlit's math) would turn into a link, an image, bold text,
+# a heading, code or a formula. Each is replaced by its HTML number (&#91; shows as "["), so the
+# browser shows the character but Markdown does not act on it. "$" starts a formula in Streamlit.
+MARKDOWN_CHARACTERS = {"[": "&#91;", "]": "&#93;", "(": "&#40;", ")": "&#41;", "!": "&#33;",
+                       "*": "&#42;", "_": "&#95;", "#": "&#35;", "`": "&#96;", "~": "&#126;",
+                       "|": "&#124;", "$": "&#36;"}
+
+
+def esc(text):
+    """Log text made safe for the page:
+    1. html.escape, so a crafted log cannot inject HTML;
+    2. Markdown characters replaced (one character at a time), so "[Click](https://x)" or
+       "![x](http://1.2.3.4/p)" is shown as text, never as a link or a loaded image;
+    3. URLs, domains and IPs wrapped in <code>, which is never a clickable link;
+    4. line breaks shown as <br>."""
+    text = html.escape(str(text), quote=False)
+    text = "".join(MARKDOWN_CHARACTERS.get(character, character) for character in text)
+    return code_addresses(text).replace("\n", "<br>")
 
 
 def display_name(path):

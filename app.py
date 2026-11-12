@@ -22,7 +22,7 @@ from triage import enrich, graph, story
 from triage.checks import make_verdict, run_checks
 from triage.domains import classify_domains
 from triage.iocs import extract_iocs
-from triage.parse import read_evtx
+from triage.parse import read_evtx_with_status
 from triage.timeline import TIME_ZONES, group_by_day, in_zone
 
 TAGLINE = "Sysmon log triage for SOC teams"
@@ -102,10 +102,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def esc(text):
-    """Log text shown on the page: escape it so a crafted log cannot inject HTML, and show
-    URLs, domains and IPs as code text, which is never a clickable link."""
-    return story.code_addresses(html.escape(str(text), quote=False))
+esc = story.esc  # log text made safe for the page (see story.esc)
 
 
 def html_table(rows, short_columns=(), narrow_columns=()):
@@ -142,11 +139,11 @@ def analyse(file_bytes):
         tmp.write(file_bytes)
         path = tmp.name
     try:
-        events = read_evtx(path)
+        events, damaged = read_evtx_with_status(path)
     finally:
         os.remove(path)
     findings = run_checks(events)
-    return events, findings, extract_iocs(events, findings), story.build_steps(events, findings)
+    return events, findings, extract_iocs(events, findings), story.build_steps(events, findings), damaged
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -225,11 +222,13 @@ else:
 file_id = hashlib.sha256(file_bytes).hexdigest()
 with st.spinner("Reading the log and running the checks..."):
     try:
-        events, findings, iocs, steps = analyse(file_bytes)
+        events, findings, iocs, steps, damaged = analyse(file_bytes)
     except Exception:  # a broken or non-evtx file must not crash the page
         st.error("This file could not be read as a Windows event log (.evtx).")
         st.stop()
 
+if damaged:
+    st.warning(f"The file is damaged; {len(events)} events were read. The verdict covers only those events.")
 if not events:
     st.warning("No Sysmon events found in this file. Is it the Microsoft-Windows-Sysmon/Operational log?")
     st.stop()

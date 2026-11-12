@@ -45,6 +45,18 @@ MAX_AT_ONCE = 4
 # Results kept in memory while the app runs: (type, value) -> result. Errors are never kept.
 _cache = {}
 
+# One HTTP session for every lookup. trust_env = False makes it ignore proxy settings of the
+# computer (HTTP_PROXY ...), so a lookup to 127.0.0.1 never goes through a company proxy.
+SESSION = requests.Session()
+SESSION.trust_env = False
+
+UNEXPECTED = "the backend's answer had an unexpected shape"
+
+
+def text(value):
+    """A backend's text field as text: None or a missing value becomes ""."""
+    return str(value or "")
+
 
 def not_enriched(note, source=""):
     return {"status": "not enriched", "verdict": "", "score": None, "source": source, "note": note}
@@ -52,16 +64,24 @@ def not_enriched(note, source=""):
 
 # ---------- reading each backend's answer (pure functions, tested offline) ----------
 
+def enriched(verdict, score, source, note):
+    """A successful lookup. A verdict that is not a non-empty text means the backend changed:
+    then it is 'not enriched' (and so never cached), instead of a result the page cannot show."""
+    if not isinstance(verdict, str) or not verdict:
+        return not_enriched(UNEXPECTED, source)
+    return {"status": "enriched", "verdict": verdict, "score": score, "source": source, "note": text(note)}
+
+
 def read_hash_answer(status_code, body):
     """hash-enrich-2: 200 with body["verdict"] = {"score", "label", "reasons", ...}."""
     if status_code != 200 or "verdict" not in body:
-        return not_enriched(body.get("error", f"hash backend answered HTTP {status_code}"), "hash backend")
+        return not_enriched(text(body.get("error")) or f"hash backend answered HTTP {status_code}",
+                            "hash backend")
     verdict = body["verdict"]
-    note = "; ".join(verdict.get("reasons", [])[:3])
+    note = "; ".join(text(reason) for reason in (verdict.get("reasons") or [])[:3])
     if verdict.get("failed_sources"):
-        note += " (failed: " + ", ".join(verdict["failed_sources"]) + ")"
-    return {"status": "enriched", "verdict": verdict["label"], "score": verdict["score"],
-            "source": "hash backend", "note": note}
+        note += " (failed: " + ", ".join(text(s) for s in verdict["failed_sources"]) + ")"
+    return enriched(verdict.get("label"), verdict.get("score"), "hash backend", note)
 
 
 def read_ip_answer(status_code, body):
@@ -69,26 +89,27 @@ def read_ip_answer(status_code, body):
     if status_code == 503:
         return not_enriched("every IP source was unavailable, try again later", "IP backend")
     if status_code != 200 or "verdict" not in body:
-        return not_enriched(body.get("message", f"IP backend answered HTTP {status_code}"), "IP backend")
+        return not_enriched(text(body.get("message")) or f"IP backend answered HTTP {status_code}",
+                            "IP backend")
     verdict = body["verdict"]
-    if verdict["level"] == "not_applicable":
+    if verdict.get("level") == "not_applicable":
         return not_enriched("private or reserved address, not judged", "IP backend")
-    return {"status": "enriched", "verdict": verdict["level"], "score": verdict["score"],
-            "source": "IP backend", "note": verdict.get("summary") or "; ".join(verdict.get("reasons", []))}
+    note = text(verdict.get("summary")) or "; ".join(text(r) for r in (verdict.get("reasons") or []))
+    return enriched(verdict.get("level"), verdict.get("score"), "IP backend", note)
 
 
 def read_domain_answer(status_code, body):
     """ioc-simple-dns: 200 with body["assessment"] = {"verdict", "verdict_label", "average", ...}."""
     if status_code != 200 or "assessment" not in body:
-        return not_enriched(body.get("error", f"DNS backend answered HTTP {status_code}"), "DNS backend")
+        return not_enriched(text(body.get("error")) or f"DNS backend answered HTTP {status_code}",
+                            "DNS backend")
     assessment = body["assessment"]
-    if assessment["verdict"] == "not_graded":
+    if assessment.get("verdict") == "not_graded":
         return not_enriched("no DNS source could be reached", "DNS backend")
-    note = assessment["verdict_label"]
+    note = text(assessment.get("verdict_label"))
     if assessment.get("verdict_note"):
-        note += f" ({assessment['verdict_note']})"
-    return {"status": "enriched", "verdict": assessment["verdict"], "score": assessment["average"],
-            "source": "DNS backend", "note": note}
+        note += f" ({text(assessment['verdict_note'])})"
+    return enriched(assessment.get("verdict"), assessment.get("average"), "DNS backend", note)
 
 
 def simple_verdict(result):
@@ -110,7 +131,7 @@ def simple_verdict(result):
 def ask(url, timeout, reader, source):
     """GET one URL and read the answer. Every failure becomes 'not enriched'."""
     try:
-        response = requests.get(url, timeout=timeout)
+        response = SESSION.get(url, timeout=timeout)
     except requests.exceptions.ConnectTimeout:
         # On Windows a port nobody listens on often looks like a connect timeout.
         return not_enriched("backend is not running", source)
@@ -200,7 +221,7 @@ def check_health():
     """Return {"Hash backend": True/False, "IP backend": ..., "DNS backend": ...}."""
     def answers(url, any_status_is_ok=False):
         try:
-            response = requests.get(url, timeout=HEALTH_TIMEOUT)
+            response = SESSION.get(url, timeout=HEALTH_TIMEOUT)
         except requests.exceptions.RequestException:
             return False
         return response.status_code < 500 if any_status_is_ok else response.status_code == 200

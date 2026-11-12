@@ -218,3 +218,83 @@ def test_encoded_new_account_is_found_with_the_password_hidden():
     findings = run_checks(events)
     assert [f["check"] for f in findings] == ["access_change"]
     assert "Winter2026!" not in findings[0]["detail"]
+
+
+# ---------- Block 4: the page never crashes ----------
+
+def test_backend_answers_with_empty_fields_are_not_enriched_and_not_cached(monkeypatch):
+    from triage import enrich
+    assert enrich.read_hash_answer(200, {"verdict": {"label": None, "score": 1}})["status"] == "not enriched"
+    assert enrich.read_ip_answer(200, {"verdict": {"level": 5, "score": 1}})["status"] == "not enriched"
+    assert enrich.read_domain_answer(200, {"assessment": {"verdict": ""}})["status"] == "not enriched"
+    error = enrich.read_hash_answer(500, {"error": None})
+    assert error["status"] == "not enriched" and error["note"] == "hash backend answered HTTP 500"
+
+    class Answer:
+        status_code = 200
+
+        def json(self):
+            return {"verdict": {"label": None, "score": 1}}
+
+    monkeypatch.setattr(enrich.SESSION, "get", lambda url, timeout: Answer())
+    ioc = {"type": "sha256", "value": "a" * 64, "enrich": True, "why_not": ""}
+    assert enrich.enrich_one(ioc)["note"] == enrich.UNEXPECTED
+    assert ("sha256", "a" * 64) not in enrich._cache
+
+
+def test_lookups_ignore_the_computers_proxy_settings():
+    from triage import enrich
+    assert enrich.SESSION.trust_env is False
+
+
+def sysmon_xml(n, time):
+    return ('<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System>'
+            '<Provider Name="Microsoft-Windows-Sysmon"/><EventID>1</EventID>'
+            f'<TimeCreated SystemTime="{time}"/><EventRecordID>{n}</EventRecordID>'
+            '<Computer>LAB-PC01</Computer></System><EventData>'
+            f'<Data Name="Image">C:\\a.exe</Data></EventData></Event>')
+
+
+def test_an_event_with_a_broken_time_is_skipped(monkeypatch):
+    from triage import parse
+
+    class FakeParser:
+        def __init__(self, path):
+            pass
+
+        def records(self):
+            return [{"data": sysmon_xml(1, "2026-02-01 09:00:00.000000+00:00")},
+                    {"data": sysmon_xml(2, "not a time")}]
+
+    monkeypatch.setattr(parse, "PyEvtxParser", FakeParser)
+    assert [e["record_id"] for e in parse.read_evtx("any.evtx")] == [1]
+
+
+def test_a_reader_error_keeps_the_events_read_so_far(monkeypatch):
+    from triage import parse
+
+    def records():
+        yield {"data": sysmon_xml(1, "2026-02-01 09:00:00.000000+00:00")}
+        raise RuntimeError("the file is cut off")
+
+    class FakeParser:
+        def __init__(self, path):
+            pass
+
+        def records(self):
+            return records()
+
+    monkeypatch.setattr(parse, "PyEvtxParser", FakeParser)
+    events, damaged = parse.read_evtx_with_status("any.evtx")
+    assert [e["record_id"] for e in events] == [1] and damaged is True
+
+
+def test_esc_shows_markdown_links_and_images_as_text():
+    from triage.story import esc
+    link = esc("[Click](https://evil.example/x)")
+    image = esc("![x](http://1.2.3.4/p)")
+    for shown in (link, image):
+        assert "[" not in shown and "](" not in shown and "!" not in shown
+    assert "<code>https://evil.example/x" in link
+    assert esc("https://a.example/x_y z") == "<code>https://a.example/x&#95;y</code> z"   # the URL stays whole
+    assert esc("<b>a</b>\nb $x$") == "&lt;b&gt;a&lt;/b&gt;<br>b &#36;x&#36;"

@@ -120,23 +120,40 @@ def event_from_xml(xml_text):
     return event
 
 
-def read_evtx(path):
-    """Read a whole .evtx file and return its Sysmon events, oldest first."""
+def read_evtx_with_status(path):
+    """Read a whole .evtx file. Returns (Sysmon events oldest first, damaged), where damaged is
+    True when the reader had to stop early: the events read up to that point are still returned."""
     events = []
+    damaged = False
     # records() gives one dict per event; record["data"] is the event's XML text.
     # The reader itself skips records it cannot decode, so a damaged part of the file
     # does not stop the rest.
-    for record in PyEvtxParser(str(path)).records():
+    records = iter(PyEvtxParser(str(path)).records())
+    while True:
+        try:
+            record = next(records)
+        except StopIteration:
+            break  # the normal end of the file
+        except (RuntimeError, OSError):
+            damaged = True  # the reader itself gave up (a cut-off or broken file)
+            break
         try:
             event = event_from_xml(record["data"])
+            if event is not None:
+                to_datetime(event["time"])  # fails (ValueError) for a time we cannot read
         except Exception:
-            # A record whose XML we cannot read: skip it rather than fail the whole file.
+            # A record whose XML or time we cannot read: skip it rather than fail the whole file.
             continue
         if event is not None:
             events.append(event)
 
     events.sort(key=lambda e: (e["time"], e["record_id"]))
-    return events
+    return events, damaged
+
+
+def read_evtx(path):
+    """Read a whole .evtx file and return its Sysmon events, oldest first."""
+    return read_evtx_with_status(path)[0]
 
 
 def to_datetime(time_text):

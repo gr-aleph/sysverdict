@@ -1,6 +1,6 @@
 """Enrichment clients, tested offline with saved backend answers (see fixtures/backends/README.md).
 
-requests.get is replaced by a fake that returns a saved answer, raises a timeout, or refuses
+SESSION.get (enrich.py) is replaced by a fake that returns a saved answer, raises a timeout, or refuses
 the connection, so no test touches the network.
 """
 
@@ -95,38 +95,38 @@ def test_simple_verdict_mapping():
 # ---------- failures never crash ----------
 
 def test_backend_not_running(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({}))
     result = enrich.enrich_one(ioc("ip", "8.8.8.8"))
     assert result == {"status": "not enriched", "verdict": "", "score": None,
                       "source": "IP backend", "note": "backend is not running"}
 
 
 def test_timeout(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/domain/": requests.exceptions.ReadTimeout()}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/domain/": requests.exceptions.ReadTimeout()}))
     assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "no answer in time"
 
 
 def test_any_other_request_error_is_not_enriched(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/domain/": requests.exceptions.InvalidURL()}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/domain/": requests.exceptions.InvalidURL()}))
     assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "the request failed"
 
 
 def test_connect_timeout_means_not_running(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/domain/": requests.exceptions.ConnectTimeout()}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/domain/": requests.exceptions.ConnectTimeout()}))
     assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "backend is not running"
 
 
 def test_answer_that_is_not_json(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/hash/": (502, ValueError("not json"))}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/hash/": (502, ValueError("not json"))}))
     assert enrich.enrich_one(ioc("sha256", "a" * 64))["note"] == "the answer was not JSON"
 
 
 def test_answer_with_an_unexpected_shape(monkeypatch):
     # A JSON list instead of an object.
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/hash/": (200, ["not", "a", "dict"])}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/hash/": (200, ["not", "a", "dict"])}))
     assert enrich.enrich_one(ioc("sha256", "a" * 64))["note"] == "the backend's answer had an unexpected shape"
     # An object whose "verdict" has no "label".
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/hash/": (200, {"verdict": {"score": 5}})}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/v1/hash/": (200, {"verdict": {"score": 5}})}))
     result = enrich.enrich_one(ioc("sha256", "b" * 64))
     assert result["status"] == "not enriched"
     assert result["note"] == "the backend's answer had an unexpected shape"
@@ -134,7 +134,7 @@ def test_answer_with_an_unexpected_shape(monkeypatch):
 
 def test_blocked_ioc_is_never_sent(monkeypatch):
     get = fake_get({})
-    monkeypatch.setattr(enrich.requests, "get", get)
+    monkeypatch.setattr(enrich.SESSION, "get", get)
     result = enrich.enrich_one(ioc("ip", "2606:4700::1", enrich_ok=False, why_not="IPv6 is not supported"))
     assert result["status"] == "not enriched"
     assert get.calls == []
@@ -144,7 +144,7 @@ def test_blocked_ioc_is_never_sent(monkeypatch):
 
 def test_at_most_four_new_hashes_per_run_and_results_are_cached(monkeypatch):
     get = fake_get({"/api/v1/hash/": load_backend_answer("hash_found.json")})
-    monkeypatch.setattr(enrich.requests, "get", get)
+    monkeypatch.setattr(enrich.SESSION, "get", get)
     hashes = [ioc("sha256", str(n) * 64) for n in range(6)]
 
     first = enrich.enrich_all(hashes)
@@ -160,7 +160,7 @@ def test_at_most_four_new_hashes_per_run_and_results_are_cached(monkeypatch):
 def test_at_most_twenty_new_ips_and_domains_per_run(monkeypatch):
     get = fake_get({"/api/ip/": load_backend_answer("ip_ok.json"),
                     "/api/v1/domain/": load_backend_answer("domain_ok.json")})
-    monkeypatch.setattr(enrich.requests, "get", get)
+    monkeypatch.setattr(enrich.SESSION, "get", get)
     ips = [ioc("ip", f"8.8.{n}.1") for n in range(22)]
     domains = [ioc("domain", f"site{n}.example.com") for n in range(22)]
 
@@ -178,7 +178,7 @@ def test_lookups_run_side_by_side(monkeypatch):
         time.sleep(0.3)
         return answer(url, timeout)
 
-    monkeypatch.setattr(enrich.requests, "get", slow_get)
+    monkeypatch.setattr(enrich.SESSION, "get", slow_get)
     ips = [ioc("ip", f"8.8.{n}.1") for n in range(4)]
     progress = []
     start = time.perf_counter()
@@ -191,19 +191,19 @@ def test_lookups_run_side_by_side(monkeypatch):
 
 
 def test_errors_are_not_cached(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({}))
     enrich.enrich_one(ioc("ip", "8.8.8.8"))
-    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/ip/": load_backend_answer("ip_ok.json")}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({"/api/ip/": load_backend_answer("ip_ok.json")}))
     assert enrich.enrich_one(ioc("ip", "8.8.8.8"))["status"] == "enriched"
 
 
 def test_health(monkeypatch):
-    monkeypatch.setattr(enrich.requests, "get", fake_get({
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({
         "/api/v1/health": (200, {"status": "ok"}),
         "/api/ip/": (400, {"error": "invalid_ip"}),  # the IP backend's answer to an empty address
     }))
     assert enrich.check_health() == {"Hash backend": True, "IP backend": True, "DNS backend": True}
-    monkeypatch.setattr(enrich.requests, "get", fake_get({}))
+    monkeypatch.setattr(enrich.SESSION, "get", fake_get({}))
     assert enrich.check_health() == {"Hash backend": False, "IP backend": False, "DNS backend": False}
 
 
