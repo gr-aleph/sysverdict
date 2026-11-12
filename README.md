@@ -1,6 +1,6 @@
 # SysVerdict
 
-Sysmon log triage for SOC teams. Upload a Sysmon `.evtx` log and get a verdict (Malicious,
+Sysmon log triage for SOC analysts. Upload a Sysmon `.evtx` log and get a verdict (Malicious,
 Suspicious or Benign), the attack story with MITRE ATT&CK tags, next steps grouped by NIST incident
 response phase, IOCs and a process tree. Every claim links to the raw events behind it.
 

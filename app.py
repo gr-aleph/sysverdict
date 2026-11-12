@@ -25,7 +25,7 @@ from triage.iocs import extract_iocs
 from triage.parse import read_evtx_with_status
 from triage.timeline import TIME_ZONES, group_by_day, in_zone
 
-TAGLINE = "Sysmon log triage for SOC teams"
+TAGLINE = "sysmon log triage for SOC analysts"
 CONFIDENCE = {"Strong": "High confidence", "Weak": "Low confidence"}
 # The NIST name, shown only where it differs from the phase label.
 PHASE_HELP = {"Investigate": "Detection & Analysis"}
@@ -39,6 +39,11 @@ st.markdown("""
   .block-container {padding-top: 2rem; max-width: 1400px;}
   .wordmark {font-weight: 700; letter-spacing: .14em; font-size: 1rem; color: #5CC8FF;}
   .wordmark span {color: #E6E1D6;}
+  /* The start page: a large title with a quieter grey tagline under it. */
+  /* clamp(smallest, preferred, largest): 3.2rem on a computer, smaller on a phone so the word never breaks. */
+  /* margin-top keeps it clear of Streamlit's top bar on a phone. */
+  .wordmark-big {font-size: clamp(1.8rem, 9vw, 3.2rem); line-height: 1.1; white-space: nowrap; margin-top: 1rem;}
+  .tagline {color: #8B96A3; font-size: 1.15rem; font-weight: 400; margin: .2rem 0 1.4rem 0;}
   .muted {color: #8B96A3; font-size: .85rem;}
   .verdict {border-radius: 8px; padding: 1.1rem 1.4rem; margin-bottom: 1rem; border-left: 8px solid;}
   .verdict .label {font-size: 2rem; font-weight: 700; letter-spacing: .08em;}
@@ -202,9 +207,8 @@ with st.sidebar:
 # ---------- empty state ----------
 
 if uploaded is None and sample is None:
-    st.markdown('<div class="wordmark" style="font-size:1.8rem">SYS<span>VERDICT</span></div>',
-                unsafe_allow_html=True)
-    st.markdown(f"### {TAGLINE}")
+    st.markdown('<div class="wordmark wordmark-big">SYS<span>VERDICT</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="tagline">{TAGLINE}</div>', unsafe_allow_html=True)
     left, middle, right = st.columns(3)
     left.markdown('<div class="card"><div class="title">1. Upload</div>Sysmon logs only (.evtx). '
                   'Other Windows event logs are not supported.</div>', unsafe_allow_html=True)
