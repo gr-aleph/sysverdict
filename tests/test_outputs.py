@@ -1,10 +1,9 @@
-"""Domains, process tree, timeline and PDF."""
+"""Domains, process tree and timeline."""
 
 from tests.fixtures.events import attack_events, benign_events
-from triage import graph, report, story
-from triage.checks import make_verdict, run_checks
+from triage import graph, story
+from triage.checks import run_checks
 from triage.domains import classify_domains
-from triage.iocs import extract_iocs
 from triage.timeline import TIME_ZONES, event_label, group_by_day
 
 
@@ -90,21 +89,3 @@ def test_days_follow_the_chosen_zone():
     assert [day for day, _ in utc] == ["Day 1 · Mon 05 Jan 2026", "Day 2 · Tue 06 Jan 2026"]
     singapore = group_by_day(items, "Asia/Singapore")  # both are 6 Jan in Singapore
     assert len(singapore) == 1 and singapore[0][1][0][0] == "06:00:00"
-
-
-# ---------- PDF ----------
-
-def test_pdf_is_built():
-    events = attack_events()
-    findings, steps = analysed(events)
-    verdict = make_verdict(findings)
-    pdf = report.build_pdf("lab.evtx", verdict, steps, story.key_moments(steps),
-                           story.next_steps(findings, verdict, steps), findings,
-                           extract_iocs(events, findings), {})
-    assert pdf.startswith(b"%PDF") and len(pdf) > 10_000
-
-
-def test_pdf_for_a_benign_log():
-    pdf = report.build_pdf("clean.evtx", make_verdict([]), [], [], story.next_steps([], make_verdict([])),
-                           [], [], {})
-    assert pdf.startswith(b"%PDF")

@@ -2,7 +2,7 @@
 
 Sysmon log triage for SOC teams. Upload a Sysmon `.evtx` log and get a verdict (Malicious,
 Suspicious or Benign), the attack story with MITRE ATT&CK tags, next steps grouped by NIST incident
-response phase, IOCs, a process tree and a PDF report. Every claim links to the raw events behind it.
+response phase, IOCs and a process tree. Every claim links to the raw events behind it.
 
 Logs are processed locally. Offline mode is on by default; when it is off, only hashes, public IPv4
 addresses and public domains are sent, and only to the local enrichment backends. See [design.md](design.md).

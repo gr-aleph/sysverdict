@@ -33,7 +33,6 @@ def test_browser_download_with_referrer_uac_and_double_click():
     assert "with Edge from https://www.fireeyee.com/download/FireEyeInstaller.exe" in origin["text"]
     assert "from the page https://www.fireeyee.com/" in origin["text"]
     assert "How the user reached that site" in origin["text"]  # no DNS lookup for it in the log
-    assert execution["follows"] == 1
     assert "double-clicking" in execution["text"] and "UAC" in execution["text"]
 
 
@@ -110,13 +109,6 @@ def test_every_step_has_a_tag_proof_and_a_number():
     assert all(s["technique"] for s in steps[1:])
 
 
-def test_steps_link_to_what_caused_them():
-    steps = steps_of(attack_events())
-    service = next(s for s in steps if s["technique"].startswith("T1543.003"))
-    dropper = next(s for s in steps if s["number"] == service["follows"])
-    assert "video.mp4.exe" in dropper["image"]
-
-
 def test_no_story_for_a_benign_log():
     assert steps_of(benign_events()) == []
 
@@ -144,15 +136,6 @@ def test_page_shows_real_addresses_as_code_text():
                                           "then called `167.172.71.11:80`")
     assert story.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
 
-
-def test_defang_makes_links_unclickable_but_keeps_file_names():
-    text = "Edge saved FireEye.exe from https://www.fireeyee.com/a.exe, then called 167.172.71.11:80"
-    assert story.defang(text) == ("Edge saved FireEye.exe from hxxps://www[.]fireeyee[.]com/a.exe, "
-                                  "then called 167[.]172[.]71[.]11:80")
-    assert story.defang("version 10.0.22621.1") == "version 10.0.22621.1"
-
-
-# ---------- next steps ----------
 
 def test_next_steps_use_nist_phases():
     events = attack_events()

@@ -16,12 +16,12 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
               triage/story.py     delivery, attack steps, ATT&CK tags, NIST next steps
               triage/iocs.py      IOCs of flagged programs + privacy filter
               triage/graph.py     process tree
-              triage/timeline.py, domains.py, report.py
+              triage/timeline.py, domains.py
               triage/enrich.py ──HTTP──> hash / IP / DNS backends (127.0.0.1) ──> public threat-intel sources
 ```
 
 - **Where the log goes:** it is read in memory; a temporary copy needed by python-evtx is deleted right after
-  parsing. Nothing is stored. PDF and CSV files exist only when the analyst downloads them.
+  parsing. Nothing is stored. CSV and JSON files exist only when the analyst downloads them.
 - **What leaves the machine:** nothing in offline mode (the default). Otherwise, only after the analyst presses
   *Enrich IOCs*: SHA256 hashes, public IPv4 addresses and public domains of flagged programs, sent to the local
   backends. Raw events, usernames, hostnames, paths, registry keys, private IPs, IPv6 and internal names are
@@ -52,7 +52,7 @@ Connection errors, timeouts and non-JSON replies always become "not enriched" wi
 - **IOCs only for flagged programs:** keeps the list actionable and protects the enrichment sources' rate limits.
 - **Enrichment on demand, capped per run and cached:** nothing leaves by accident and the VirusTotal free tier is respected; errors are never cached.
 - **Enrichment can raise the verdict, never lower it:** "no known bad" from a source is absence of evidence and does not cancel a finding.
-- **Addresses are shown exactly but never as links:** the page renders URLs, domains and IPs as code text so nobody opens an attacker's site by accident; the PDF defangs them (hxxps, [.]) because PDF readers create links on their own.
+- **Addresses are shown exactly but never as links:** the page renders URLs, domains and IPs as code text so nobody opens an attacker's site by accident.
 - **An indented process tree, not a graph drawing:** a fixed layout cannot overlap and reads top to bottom like an EDR process view.
 - **Domain labels are heuristics marked "likely":** Sysmon has no referrer, so visited sites and page resources are inferred from timing and a local ad/CDN list.
 - **Templated explanations, no AI service:** no log data leaves the machine and the same log always gives the same text.

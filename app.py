@@ -3,7 +3,7 @@
 Run with:  .venv\\Scripts\\python -m streamlit run app.py
 
 Flow: upload a .evtx -> parse -> 10 checks -> verdict -> story (steps with MITRE ATT&CK tags),
-next steps (NIST phases), findings, IOCs, process tree, timeline, domains, PDF.
+next steps (NIST phases), findings, IOCs, process tree, timeline, domains.
 Enrichment is optional and off by default (offline mode).
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from triage import enrich, graph, report, story
+from triage import enrich, graph, story
 from triage.checks import make_verdict, run_checks
 from triage.domains import classify_domains
 from triage.iocs import extract_iocs
@@ -192,7 +192,7 @@ if uploaded is None and sample is None:
                     'attack behaviour. Every finding points to the exact events behind it.</div>',
                     unsafe_allow_html=True)
     right.markdown('<div class="card"><div class="title">3. Act</div>Get a verdict, the attack story '
-                   'with MITRE ATT&amp;CK tags, next steps, IOCs and a PDF for the ticket.</div>',
+                   'with MITRE ATT&amp;CK tags, next steps and IOCs for the ticket.</div>',
                    unsafe_allow_html=True)
     st.stop()
 
@@ -238,7 +238,7 @@ columns[4].metric("Computers", len({e["computer"] for e in events}))
 first, last = in_zone(events[0]["time"], zone), in_zone(events[-1]["time"], zone)
 st.caption(f"{file_label}  |  {first:%Y-%m-%d %H:%M} to {last:%Y-%m-%d %H:%M} ({'UTC' if zone is None else zone_label})")
 
-tabs = st.tabs(["Summary", "Findings", "IOCs", "Process tree", "Timeline", "Domains", "Report"])
+tabs = st.tabs(["Summary", "Findings", "IOCs", "Process tree", "Timeline", "Domains"])
 
 
 def step_row(clock, step, number):
@@ -439,15 +439,3 @@ with tabs[5]:
     html_table([{time_column: f"{in_zone(r['time'], zone):%Y-%m-%d %H:%M:%S}", "Domain": r["domain"],
                  "Label": r["label"], "Program": r["program"], "Event #": r["event_id"]} for r in shown],
                short_columns=(time_column, "Event #"))
-
-
-# ---------- Report ----------
-
-with tabs[6]:
-    st.write("A PDF with the verdict, key moments, next steps, the full story with MITRE ATT&CK tags, "
-             "and IOCs with enrichment results. It is built on this computer.")
-    if st.button("Build PDF report", type="primary"):
-        with st.spinner("Building the PDF..."):
-            pdf = report.build_pdf(file_label, verdict, steps, moments, plan, findings, iocs, enrichment)
-        st.download_button("Download PDF", pdf, f"sysverdict-{file_label.rsplit('.', 1)[0]}.pdf",
-                           "application/pdf", on_click="ignore")

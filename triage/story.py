@@ -6,7 +6,6 @@ The story is a numbered list of steps. Each step is a plain dict:
      "tactic": "Discovery", "technique": "T1033 System Owner/User Discovery",   # MITRE ATT&CK
      "text": "The installer ran whoami.exe, ipconfig.exe within 60 seconds ...",  # plain English
      "technical": "Sysmon 1 – Process Create · cmd.exe /c whoami",               # for the analyst
-     "follows": 2,                       # the earlier step that caused this one (or None)
      "confidence": "High",               # High / Low, or "" for how-it-got-in steps
      "event_ids": [16713, 16715],        # the proof
      "guid": "{...}", "image": "c:\\...\\fireeye.exe"}
@@ -14,7 +13,7 @@ The story is a numbered list of steps. Each step is a plain dict:
 How it is built:
   1. find_delivery()  - how the first malicious file got onto the computer and who started it
   2. one step per finding that belongs to the attack (High, and Low ones of the same programs)
-  3. sort by time, number them, and link each step to the step that caused it
+  3. sort them by time and number them 1, 2, 3, ...
 """
 
 import re
@@ -42,30 +41,12 @@ DOMAIN_OR_IP = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,6}\b|\b\d{1,3}(?:\.\d{1,3
                           re.IGNORECASE)
 
 
-def defang(text):
-    """Make URLs, domains and IPs unclickable for display: https://a.com -> hxxps://a[.]com.
-
-    Standard SOC practice, so nobody opens an attacker's site by accident. File names such as
-    FireEye.exe are left alone. IOC tables and exports keep the real values for copying into tools.
-    """
-    # Every word that starts with "http" becomes "hxxp" ((?i) = any letter case).
-    text = re.sub(r"(?i)\bhttp", "hxxp", text)
-
-    def fix(match):
-        token = match.group(0)
-        ending = token.rsplit(".", 1)[-1].lower()
-        if ending in FILE_ENDINGS:
-            return token
-        return token.replace(".", "[.]")
-    return DOMAIN_OR_IP.sub(fix, text)
-
-
 # A full URL, a domain or an IPv4 address (a URL is matched whole, before its domain).
 # URL: "http" or "https", "://", then the shortest run of characters that are not spaces,
 # quotes or angle brackets (+?), stopping where an optional final punctuation mark
 # (. , ; : ) ]) is followed by a space or the end of the text. So in "visit https://a.com/x."
 # the URL is "https://a.com/x" without the sentence's full stop.
-URL =r"https?://[^\s<>\"'`]+?(?=[.,;:)\]]?(?:\s|$))"
+URL = r"https?://[^\s<>\"'`]+?(?=[.,;:)\]]?(?:\s|$))"
 ADDRESS = re.compile(f"{URL}|{DOMAIN_OR_IP.pattern}", re.IGNORECASE)
 
 
@@ -342,23 +323,8 @@ def build_steps(events, findings):
     steps = [s for s in steps if not (s["confidence"] == "Low" and set(s["event_ids"]) <= told)]
     steps.sort(key=lambda s: (s["time"], s["kind"] != "origin"))
 
-    # Number the steps and link each one to the step that caused it: the step of its parent
-    # process, of the program that dropped its file, or an earlier step of the same program.
-    processes = {e["ProcessGuid"]: e for e in events if e["event_id"] == 1 and e.get("ProcessGuid")}
-    dropped_by = {e.get("TargetFilename", "").lower(): e.get("Image", "").lower()
-                  for e in events if e["event_id"] == 11}
     for number, step in enumerate(steps, start=1):
         step["number"] = number
-        step["follows"] = None
-        process = processes.get(step["guid"], {})
-        cause_guids = {process.get("ParentProcessGuid"), step["guid"]} - {None, ""}
-        cause_images = {process.get("ParentImage", "").lower(), dropped_by.get(step["image"], ""),
-                        step["image"]} - {""}
-        for earlier in reversed(steps[:number - 1]):
-            same_file = earlier["kind"] == "origin" and step["kind"] == "execution"
-            if same_file or earlier["guid"] in cause_guids or earlier["image"] in cause_images:
-                step["follows"] = earlier["number"]
-                break
     return steps
 
 
