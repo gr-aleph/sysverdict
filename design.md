@@ -20,7 +20,7 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
               triage/enrich.py ──HTTP──> hash / IP / DNS backends (127.0.0.1) ──> public threat-intel sources
 ```
 
-- **Where the log goes:** it stays on this computer. python-evtx can only read a file, so a temporary copy is
+- **Where the log goes:** it stays on this computer. The evtx reader reads a file, so a temporary copy is
   written to the Windows Temp folder, read, and deleted right after parsing (also when parsing fails); the
   results are kept in memory while the app runs. Nothing is stored. CSV and JSON files exist only when the analyst downloads them.
 - **What leaves the machine:** nothing in offline mode (the default). Otherwise, only after the analyst presses

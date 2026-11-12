@@ -137,7 +137,7 @@ def html_table(rows, short_columns=(), narrow_columns=()):
 @st.cache_data(show_spinner=False, max_entries=5)
 def analyse(file_bytes):
     """Parse the log and run the checks. Cached by the file's content."""
-    # python-evtx reads from a file on disk: write a temporary copy, read it, delete it.
+    # The evtx reader reads from a file on disk: write a temporary copy, read it, delete it.
     with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
         tmp.write(file_bytes)
         path = tmp.name
