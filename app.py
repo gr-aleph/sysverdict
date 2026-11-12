@@ -354,7 +354,7 @@ with tabs[2]:
         intel = [i for i in iocs if i["type"] in INTEL_TYPES]
         other = [i for i in iocs if i["type"] not in INTEL_TYPES]
 
-        st.subheader("Checked against threat intel")
+        st.subheader("Enrichable IOCs")
         st.caption("Hashes, public IPv4 addresses and public domains of the flagged programs. Only these "
                    "can be sent to the enrichment backends; everything else stays on this computer.")
         if offline:
