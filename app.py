@@ -182,8 +182,8 @@ with st.sidebar:
             st.markdown(f'<span class="dot {state}"></span>{name}: {"running" if is_up else "not running"}',
                         unsafe_allow_html=True)
     st.write("")
-    st.markdown('<div class="muted">Logs are read in memory on this computer. No AI service, no '
-                'telemetry, no CDN.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="muted">Logs stay on this computer: a temporary copy is read and deleted at '
+                'once. No AI service, no telemetry, no CDN.</div>', unsafe_allow_html=True)
 
 
 # ---------- empty state ----------
