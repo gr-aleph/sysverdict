@@ -82,6 +82,36 @@ def test_lookalike_becomes_strong_when_malware_looks_it_up_after_a_browser():
     assert lookalike[0]["event_ids"] == [1, 2]
 
 
+def test_passwords_are_hidden():
+    hide = parse.hide_secrets
+    assert hide(r"net use \\pc02\c$ Secret1 /user:lab\admin") == r"net use \\pc02\c$ **** /user:lab\admin"
+    assert hide(r"net use z: \\pc02\share Secret1") == r"net use z: \\pc02\share ****"
+    assert hide(r"net use \\pc02\c$ /user:lab\admin") == r"net use \\pc02\c$ /user:lab\admin"  # no password
+    assert hide("psexec \\\\pc02 -u admin -p Secret1 cmd") == "psexec \\\\pc02 -u admin -p **** cmd"
+    assert hide("tool.exe /p:Secret1 /x") == "tool.exe /p:**** /x"
+    assert hide("tool.exe --password=Secret1") == "tool.exe --password=****"
+    assert hide("New-Thing -Password 'Secret 1' -Force") == "New-Thing -Password **** -Force"
+    assert hide('schtasks /create /tn T /ru admin /rp "Secret 1"') == "schtasks /create /tn T /ru admin /rp ****"
+    assert hide("Server=db01;Database=x;Pwd=Secret1;") == "Server=db01;Database=x;Pwd=****;"
+    # Normal command lines are left alone.
+    for text in ["powershell.exe -enc SQBFAFgA", "C:\\Program Files\\App\\app.exe /S", "whoami /priv",
+                 "C:\\Windows\\system32\\svchost.exe -k netsvcs -p -s Schedule",  # -p without a value
+                 "C:\\Users\\analyst\\AppData\\Local\\Temp\\FireEye.exe -foobar"]:
+        assert hide(text) == text
+
+
+def test_passwords_are_hidden_when_events_are_read():
+    xml = ('<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System>'
+           '<Provider Name="Microsoft-Windows-Sysmon"/><EventID>1</EventID>'
+           '<TimeCreated SystemTime="2026-01-05 09:00:00.123456+00:00"/><EventRecordID>7</EventRecordID>'
+           '<Computer>LAB-PC01</Computer></System><EventData>'
+           '<Data Name="CommandLine">net use \\\\pc02\\c$ Secret1 /user:admin</Data>'
+           '<Data Name="ParentCommandLine">cmd.exe /c psexec -p Secret1</Data></EventData></Event>')
+    parsed = event_from_xml(xml)
+    assert "Secret1" not in str(parsed)
+    assert parsed["CommandLine"] == "net use \\\\pc02\\c$ **** /user:admin"
+
+
 def test_one_damaged_record_does_not_stop_the_file(monkeypatch):
     good_xml = ('<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System>'
                 '<Provider Name="Microsoft-Windows-Sysmon"/><EventID>1</EventID>'
