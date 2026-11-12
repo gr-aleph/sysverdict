@@ -2,7 +2,7 @@
 
 import base64
 
-from tests.fixtures.events import attack_events, benign_events, event
+from tests.fixtures.events import USER, attack_events, benign_events, event
 from triage.checks import edit_distance, make_verdict, run_checks
 from triage import parse
 from triage.parse import event_from_xml
@@ -197,7 +197,10 @@ def test_lookalike_compares_only_the_main_name():
               for n, name in enumerate(["cloud.google.com", "apply.workday.com", "offices.example.com"], start=1)]
     assert run_checks(normal) == []
     fake = [event(9, 22, "2026-01-05 09:00:00.000", Image=agent, QueryName="fireeyee.com")]
-    assert [f["strength"] for f in run_checks(fake)] == ["Strong"]
+    # Dual-use gate: an installed program with no other sign is Low; a Downloads program is High.
+    assert [f["strength"] for f in run_checks(fake)] == ["Weak"]
+    fake[0]["Image"] = USER + "\\Downloads\\setup.exe"
+    assert [f["strength"] for f in run_checks(fake) if f["check"] == "lookalike_domain"] == ["Strong"]
 
 
 def test_discord_run_key_is_known_good():
@@ -216,10 +219,12 @@ def encoded(script):
     return "powershell -NoProfile -EncodedCommand " + base64.b64encode(script.encode("utf-16-le")).decode()
 
 
-def powershell_strengths(command):
-    """The strengths of the findings for one PowerShell command line."""
-    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{ps}", Image=PS, CommandLine=command)]
-    return [f["strength"] for f in run_checks(events)]
+def powershell_strengths(command, parent=USER + "\\Downloads\\invoice_viewer.exe"):
+    """The strengths of the PowerShell findings for one command line, started by parent
+    (by default a program in Downloads, which is not an admin tool)."""
+    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{ps}", ParentProcessGuid="{parent}",
+                    Image=PS, ParentImage=parent, CommandLine=command)]
+    return [f["strength"] for f in run_checks(events) if f["check"] == "suspicious_powershell"]
 
 
 def test_hidden_or_encoded_powershell_alone_is_not_suspicious():
@@ -235,6 +240,9 @@ def test_powershell_download_and_run_is_strong():
     assert powershell_strengths(encoded(download_and_run)) == ["Strong"]       # same, hidden by encoding
     assert powershell_strengths(encoded("iex ([Text.Encoding]::UTF8.GetString("
                                         "[Convert]::FromBase64String($b)))")) == ["Strong"]
+    # Dual-use: the same line from an installed management agent, with nothing else, is Low.
+    agent = "C:\\Program Files\\Agent\\agent.exe"
+    assert powershell_strengths("powershell -c " + download_and_run, parent=agent) == ["Weak"]
 
 
 def test_powershell_download_only_is_weak():

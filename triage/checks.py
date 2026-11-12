@@ -50,9 +50,13 @@ SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe",
 RECON_TOOLS = {"whoami.exe", "ipconfig.exe", "systeminfo.exe", "net.exe", "net1.exe",
                "nltest.exe", "quser.exe", "hostname.exe", "tasklist.exe", "arp.exe",
                "netstat.exe", "route.exe", "nslookup.exe"}
-# Programs that mean "a person at the keyboard": the desktop, and a remote admin session over
-# WinRM (wsmprovhost.exe hosts PowerShell remoting). Recon typed by a person is normal help-desk work.
-PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe"}
+# Programs that mean "a person at the keyboard": the desktop, a remote admin session over
+# WinRM (wsmprovhost.exe hosts PowerShell remoting), and the windows people type commands in
+# (Windows Terminal, the PowerShell ISE, VS Code's terminal). Recon typed by a person is normal
+# help-desk work.
+PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe", "windowsterminal.exe", "powershell_ise.exe", "code.exe"}
+# Shells that only pass a command on: the recon check looks past them to find who started it.
+PASS_ON_SHELLS = ("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe")
 BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "iexplore.exe", "brave.exe",
             "opera.exe", "msedgewebview2.exe"}
 # Real Windows programs that should only ever run from the Windows folder.
@@ -65,13 +69,20 @@ SYSTEM_FOLDERS = ("c:\\windows\\system32\\", "c:\\windows\\syswow64\\", "c:\\win
 # (a copy of MsMpEng.exe in a user folder is not Microsoft Defender).
 LSASS_OK = {"svchost.exe", "msmpeng.exe", "wininit.exe", "csrss.exe", "wmiprvse.exe",
             "lsass.exe", "services.exe", "mrt.exe"}
-LSASS_OK_FOLDERS = ("c:\\windows\\", "c:\\programdata\\microsoft\\windows defender\\",
+# Only the system folders, not all of C:\Windows (C:\Windows\Temp is writable by everyone).
+LSASS_OK_FOLDERS = ("c:\\windows\\system32\\", "c:\\windows\\syswow64\\",
+                    "c:\\programdata\\microsoft\\windows defender\\",
                     "c:\\program files\\windows defender\\")
 # The access right that lets a program read another program's memory (where passwords are).
 PROCESS_VM_READ = 0x0010
 
 # Two-part domain endings: in "shop.example.co.uk" the name is "example", not "co".
 TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
+
+# Domains a brand owns itself, whose name part happens to be one letter from another brand
+# (Microsoft 365 moved to *.cloud.microsoft; "cloud" is one letter from "icloud"). A lookup of
+# one of these, or of a subdomain, is never a lookalike. Source: Microsoft's own domain list.
+BRAND_OWNED_DOMAINS = ("cloud.microsoft",)
 
 # File endings a ransom note uses (a text or web page the victim is meant to open).
 NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
@@ -206,6 +217,12 @@ def check_document_app_spawns_program(events, context):
         if file_name(e.get("ParentImage")) not in DOCUMENT_APPS:
             continue
         child = e.get("Image", "")
+        # A browser (a person clicked a link in the document or e-mail; a per-user Chrome lives in
+        # AppData) and Windows' "Open with" dialog (rundll32 shell32.dll,OpenAs_RunDLL) are normal.
+        if file_name(child) in BROWSERS:
+            continue
+        if file_name(child) == "rundll32.exe" and "openas_rundll" in e.get("CommandLine", "").lower():
+            continue
         if file_name(child) in SHELLS or in_user_folder(child):
             add_finding(found, child.lower(), e, "document_app_spawns_program",
                         "Document app started a program", "Strong", child,
@@ -275,23 +292,34 @@ def check_lsass_access(events, context):
 
 
 def find_launcher(event, processes):
-    """Who really started this command? Skip over a 'cmd /c' or PowerShell in between."""
+    """Who really started this command? Walk up past every 'cmd /c' or PowerShell in between
+    (e.g. agent -> cmd -> powershell -> whoami gives the agent). If a shell's own start is not in
+    the log (it was opened before the log began), the shell itself is returned."""
     guid, image = event.get("ParentProcessGuid", ""), event.get("ParentImage", "")
-    if file_name(image) in ("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"):
+    for _ in range(10):  # 10 shells inside each other is already far more than real life
+        if file_name(image) not in PASS_ON_SHELLS:
+            break
         parent = processes.get(guid)
-        if parent:
-            guid, image = parent.get("ParentProcessGuid", ""), parent.get("ParentImage", "")
+        if not parent:
+            break  # the shell started before the log: we cannot see who opened it
+        guid, image = parent.get("ParentProcessGuid", ""), parent.get("ParentImage", "")
     return guid, image
 
 
 def check_recon_burst(events, context):
-    """Strong: one program runs 2+ different discovery tools (whoami, ipconfig, ...) within 60 s."""
+    """Strong: one program runs 2+ different discovery tools (whoami, ipconfig, ...) within 60 s.
+    ATT&CK Discovery (T1033, T1016, T1082). Why 60 s and 2 tools: a person pauses to read each
+    answer, a script runs its tools within seconds; 60 s is a generous window for that.
+    Dual-use: admin and monitoring (RMM) tools run the same commands, so apply_dual_use_gate
+    keeps it Strong only when the program has another high-confidence sign."""
     by_launcher = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in RECON_TOOLS:
             guid, image = find_launcher(e, context["processes"])
             if file_name(image) in PERSON_PROGRAMS:
                 continue  # a person typing (locally or in a remote admin session), not a program
+            if file_name(image) in PASS_ON_SHELLS:
+                continue  # a shell opened before the log began: most likely a person's window
             by_launcher.setdefault((guid, image), []).append(e)
 
     found = {}
@@ -334,6 +362,8 @@ def check_lookalike_domain(events, context):
     found = {}
     for e in events_of(events, 22):
         domain = e.get("QueryName", "").lower().rstrip(".")
+        if any(domain == owned or domain.endswith("." + owned) for owned in BRAND_OWNED_DOMAINS):
+            continue
         brand = lookalike_brand(main_label(domain))
         if brand is None:
             continue
@@ -381,12 +411,16 @@ def check_persistence(events, context):
             # System32 or a user folder.
             dropped = value_path in context["dropped_files"]
             in_program_files = "\\program files" in value_path
+            # Defender platform updates (known-good list) and driver updates (Windows installs
+            # drivers from its DriverStore) create new service files all the time.
+            if is_known_good(value_path) or "\\windows\\system32\\driverstore\\" in value_path:
+                continue
             if (dropped and not in_program_files) or in_user_folder(value_path):
                 service = target.split("\\")[-2]
                 # Point at the service program itself (not services.exe, which wrote the key).
                 guid = next((p["ProcessGuid"] for p in context["processes"].values()
                              if p.get("Image", "").lower() == value_path), "")
-                add_finding(found, target.lower(), e, "persistence", "New service from a dropped file",
+                add_finding(found, target.lower(), e, "persistence", SERVICE_TITLE,
                             "Strong", value_path, f"service '{service}' runs {value[:150]}, a file "
                             "created during this log", guid)
     return list(found.values())
@@ -565,8 +599,11 @@ def check_tool_download(events, context):
 # Stealing saved passwords. No common legitimate use outside the browser itself: Strong.
 CREDENTIAL_THEFT_RULES = [
     # Browser password and cookie stores: Chrome/Edge "...\User Data\Default\Login Data" (also
-    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite"
-    rule(r"\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b",
+    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite".
+    # ^(?!.*\b(del|...)\b) = "the line has none of these delete words": a cleanup script deleting
+    # cookies does not steal them.
+    rule(r"^(?!.*\b(del|erase|rd|rmdir|remove-item)\b)"
+         r".*(\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b)",
          "reads a browser's saved passwords or cookies", "Credential Access",
          "T1555.003 Credentials from Web Browsers"),
     # Dumping LSASS memory with Windows' own comsvcs.dll: "rundll32 comsvcs.dll, MiniDump 624 d.dmp full"
@@ -714,6 +751,62 @@ ALL_CHECKS = [
 ]
 
 
+# ---------- the dual-use gate ----------
+# Some Strong behaviours also have a common legitimate version: recon by an admin or monitoring
+# (RMM) tool, a security product reading LSASS, a lookalike-looking domain, an install script that
+# downloads and runs code, a new service. On its own such a finding is Low. It stays High when:
+#   1. a program in its chain (itself, the program that started it, the one that wrote its file)
+#      runs from a user folder: admin and RMM tools are installed in Program Files; or
+#   2. that chain program is a proxy host (rundll32, regsvr32, mshta: ATT&CK T1218, "System
+#      Binary Proxy Execution"), which admins do not use to run commands; or
+#   3. a High finding that is NOT dual-use shares a program with its chain (e.g. the same
+#      program also deleted backups). Two dual-use findings never back each other up: an RMM
+#      tool does recon and runs download scripts on the same day.
+# Never dual-use (High on their own): disguised programs, ransom notes, stolen passwords,
+# logs/backups deleted, UAC bypass, a document starting a shell.
+DUAL_USE_CHECKS = {"recon_burst", "lookalike_domain", "suspicious_powershell", "lsass_access"}
+SERVICE_TITLE = "New service from a dropped file"   # the dual-use part of check_persistence
+PROXY_HOSTS = {"rundll32.exe", "regsvr32.exe", "mshta.exe"}
+
+
+def is_dual_use(finding):
+    return finding["check"] in DUAL_USE_CHECKS or finding["title"] == SERVICE_TITLE
+
+
+def chain_of(finding, context):
+    """ProcessGuid -> program path for the finding's program, the program that started it and
+    the program that created its file (when they are in the log)."""
+    chain = {finding["process_guid"]: finding["process"]}
+    started = context["processes"].get(finding["process_guid"])
+    if started:
+        chain[started.get("ParentProcessGuid", "")] = started.get("ParentImage", "")
+    creator = context["file_creators"].get(finding["process"].lower(), "")
+    if creator in context["processes"]:
+        chain[creator] = context["processes"][creator].get("Image", "")
+    chain.pop("", None)
+    return chain
+
+
+def apply_dual_use_gate(findings, context):
+    """Turn a dual-use Strong finding into Weak when nothing backs it up (rules 1-3 above)."""
+    to_lower = []
+    for f in findings:
+        if f["strength"] != "Strong" or not is_dual_use(f):
+            continue
+        chain = chain_of(f, context)
+        programs = list(chain.values()) + [f["process"]]
+        if any(in_user_folder(p) or file_name(p) in PROXY_HOSTS for p in programs):
+            continue  # rules 1 and 2
+        backed = any(other["strength"] == "Strong" and not is_dual_use(other)
+                     and set(chain) & set(chain_of(other, context)) for other in findings)
+        if not backed:  # rule 3
+            to_lower.append(f)
+    # Changed only after all were decided, so the order of the findings does not matter.
+    for f in to_lower:
+        f["strength"] = "Weak"
+        f["detail"] += " (dual-use: no other high-confidence sign on this program)"
+
+
 def run_checks(events):
     """Run every check and return all findings, oldest first."""
     context = {
@@ -721,10 +814,14 @@ def run_checks(events):
         "processes": {e["ProcessGuid"]: e for e in events_of(events, 1) if e.get("ProcessGuid")},
         # Every file created during the log (lowercase paths).
         "dropped_files": {e.get("TargetFilename", "").lower() for e in events_of(events, 11)},
+        # Created file (lowercase path) -> the ProcessGuid of the program that wrote it.
+        "file_creators": {e.get("TargetFilename", "").lower(): e.get("ProcessGuid", "")
+                          for e in events_of(events, 11)},
     }
     findings = []
     for check in ALL_CHECKS:
         findings.extend(check(events, context))
+    apply_dual_use_gate(findings, context)
     findings.sort(key=lambda f: f["time"])
     return findings
 

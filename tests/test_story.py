@@ -66,7 +66,11 @@ def test_document_name_is_read_from_the_word_command_line():
 
 
 def test_other_drive_has_no_technique():
-    origin = steps_of(recon_chain("D:\\setup.exe"))[0]
+    # setup.exe also clears a log (a High finding with no legitimate use), so its recon stays High.
+    clears_log = event(5, 1, "2026-01-05 10:00:02.000", ProcessGuid="{wev}", ParentProcessGuid="{x}",
+                       Image="C:\\Windows\\System32\\wevtutil.exe", ParentImage="D:\\setup.exe",
+                       CommandLine="wevtutil cl Security")
+    origin = steps_of(recon_chain("D:\\setup.exe") + [clears_log])[0]
     assert origin["text"] == "setup.exe was started from drive D: (possibly a USB or network drive)."
     assert origin["technique"] == ""
 
