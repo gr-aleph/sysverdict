@@ -10,7 +10,8 @@ address = "127.0.0.1"
 port = 8501
 # Serve the bundled fonts from ./static, so nothing is loaded from a CDN.
 enableStaticServing = true
-# Uploaded .evtx files are kept in memory only. 200 MB is Streamlit's default limit.
+# Uploaded .evtx files stay on this computer: app.py writes a temporary copy, reads it and deletes it.
+# 200 MB is Streamlit's default limit.
 maxUploadSize = 200
 
 [client]

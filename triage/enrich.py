@@ -112,6 +112,9 @@ def ask(url, timeout, reader, source):
         return not_enriched("no answer in time", source)
     except requests.exceptions.ConnectionError:
         return not_enriched("backend is not running", source)
+    except requests.exceptions.RequestException:
+        # Any other request problem (e.g. an invalid URL, too many redirects).
+        return not_enriched("the request failed", source)
     try:
         body = response.json()
     except ValueError:

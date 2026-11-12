@@ -104,6 +104,11 @@ def test_timeout(monkeypatch):
     assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "no answer in time"
 
 
+def test_any_other_request_error_is_not_enriched(monkeypatch):
+    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/domain/": requests.exceptions.InvalidURL()}))
+    assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "the request failed"
+
+
 def test_connect_timeout_means_not_running(monkeypatch):
     monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/domain/": requests.exceptions.ConnectTimeout()}))
     assert enrich.enrich_one(ioc("domain", "example.com"))["note"] == "backend is not running"

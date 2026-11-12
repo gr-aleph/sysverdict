@@ -67,22 +67,35 @@ st.markdown("""
   [data-testid="stPopover"] button p {font-size: .78rem; white-space: nowrap !important;}
   .ptree {background: #1A2129; border: 1px solid #2A3440; border-radius: 6px; padding: .7rem .9rem;
           margin-bottom: 1rem;}
-  .ptree .line {display: flex; line-height: 1.75; font-size: .9rem;}
-  .ptree .prefix {font-family: "IBM Plex Mono", monospace; color: #5B6B7C; white-space: pre; flex-shrink: 0;}
+  /* Each tree line has 3 columns: tree lines + name | time | details and tactic. */
+  .ptree .line {display: grid; grid-template-columns: minmax(0, 1.1fr) 4.6rem minmax(0, 1fr);
+                column-gap: .9rem; line-height: 1.75; font-size: .9rem;}
+  .ptree .tree {display: flex; min-width: 0;}
+  /* The tree lines, one 1.4rem piece per level, drawn with borders so they fill the whole row
+     height even when the details wrap: bar = "│", tee = "├──", end = "└──", blank = "    ". */
+  .ptree .seg {width: 1.4rem; flex-shrink: 0; position: relative;}
+  .ptree .seg::before, .ptree .seg::after {content: ""; position: absolute; left: .45rem; border-color: #5B6B7C;}
+  .ptree .bar::before, .ptree .tee::before {top: 0; bottom: 0; border-left: 1px solid;}
+  .ptree .end::before {top: 0; height: .8rem; border-left: 1px solid;}
+  .ptree .tee::after, .ptree .end::after {top: .8rem; width: .8rem; border-top: 1px solid;}
   .ptree .text {overflow-wrap: anywhere;}
-  .ptree .label {font-weight: 600; margin-right: .5rem;}
+  .ptree .time {font-family: "IBM Plex Mono", monospace; font-size: .78rem; color: #8B96A3; white-space: nowrap;}
+  .ptree .info {overflow-wrap: anywhere; min-width: 0;}
+  .ptree .label {font-weight: 600;}
+  .ptree .computer .label {font-weight: 700; letter-spacing: .03em;}
   .ptree .malicious .label {color: #E5484D;} .ptree .attack .label {color: #5CC8FF;}
   .ptree .context .label {color: #8B96A3; font-weight: 400;}
   .ptree .action .label {font-weight: 400; font-family: "IBM Plex Mono", monospace; font-size: .8rem;}
   .ptree .detail {font-family: "IBM Plex Mono", monospace; font-size: .78rem; color: #8B96A3; margin-right: .5rem;}
-  .ptree .meta {font-size: .75rem; color: #8B96A3; margin-right: .5rem;}
   .htable {max-height: 640px; overflow-y: auto; border: 1px solid #2A3440; border-radius: 6px; margin-bottom: 1rem;}
   .htable table {width: 100%; border-collapse: collapse; font-size: .9rem;}
   .htable th {position: sticky; top: 0; background: #1A2129; text-align: left; padding: .5rem .7rem;
-              color: #8B96A3; font-weight: 600; border-bottom: 1px solid #2A3440; white-space: nowrap;}
+              color: #8B96A3; font-weight: 600; border-bottom: 1px solid #2A3440; white-space: normal;}
   .htable td {padding: .45rem .7rem; border-bottom: 1px solid #1E262F; vertical-align: top;
               white-space: normal; overflow-wrap: anywhere;}
   .htable td.short {white-space: nowrap; font-family: "IBM Plex Mono", monospace; font-size: .8rem; color: #8B96A3;}
+  /* Narrow columns take a fixed share of the table and wrap between words; the rest goes to the long column. */
+  .htable td.narrow {width: 17%; font-size: .8rem; overflow-wrap: normal;}
   .dot {display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .45rem;}
   .up {background: #3DB39E;} .down {background: #E5484D;} .off {background: #5B6B7C;}
 </style>
@@ -95,10 +108,11 @@ def esc(text):
     return story.code_addresses(html.escape(str(text), quote=False))
 
 
-def html_table(rows, short_columns=()):
+def html_table(rows, short_columns=(), narrow_columns=()):
     """Draw a list of row dicts as a plain HTML table whose long values wrap, so nothing is cut
-    (st.dataframe cuts long hashes and paths). Columns named in short_columns stay on one line.
-    Raw HTML is never turned into links, so addresses are shown as-is but cannot be clicked."""
+    (st.dataframe cuts long hashes and paths). Columns named in short_columns stay on one line;
+    columns in narrow_columns get a fixed narrow width and wrap. A "\\n" in a value starts a new
+    line in the cell. Raw HTML is never turned into links, so addresses cannot be clicked."""
     if not rows:
         return
     header = "".join(f"<th>{html.escape(name)}</th>" for name in rows[0])
@@ -106,8 +120,13 @@ def html_table(rows, short_columns=()):
     for row in rows:
         cells = ""
         for name, value in row.items():
-            css = ' class="short"' if name in short_columns else ""
-            cells += f"<td{css}>{html.escape(str(value))}</td>"
+            css = ""
+            if name in short_columns:
+                css = ' class="short"'
+            elif name in narrow_columns:
+                css = ' class="narrow"'
+            # Escape first (so log text cannot inject HTML), then turn line breaks into <br>.
+            cells += f"<td{css}>{html.escape(str(value)).replace(chr(10), '<br>')}</td>"
         body += f"<tr>{cells}</tr>"
     st.markdown(f'<div class="htable"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>',
                 unsafe_allow_html=True)
@@ -174,8 +193,8 @@ with st.sidebar:
             st.markdown(f'<span class="dot {state}"></span>{name}: {"running" if is_up else "not running"}',
                         unsafe_allow_html=True)
     st.write("")
-    st.markdown('<div class="muted">Logs are read in memory on this computer. No AI service, no '
-                'telemetry, no CDN.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="muted">Logs stay on this computer: a temporary copy is read and deleted at '
+                'once. No AI service, no telemetry, no CDN.</div>', unsafe_allow_html=True)
 
 
 # ---------- empty state ----------
@@ -242,12 +261,12 @@ tabs = st.tabs(["Summary", "Findings", "IOCs", "Process tree", "Timeline", "Doma
 
 
 def step_row(clock, step, number):
-    """One key event: time, ATT&CK tactic (technique on hover), number, sentence, Details button."""
+    """One key event: number, time, ATT&CK tactic (technique on hover), sentence, Details button."""
     text_column, details_column = st.columns([5, 1])
     low = '<span class="chip chip-Weak">LOW CONFIDENCE</span>' if step["confidence"] == "Low" else ""
-    body = (f'<span class="clock">{clock}</span>'
+    body = (f'<b>{number}.</b> <span class="clock">{clock}</span>'
             f'<span class="chip chip-tactic" title="{html.escape(step["technique"])}">{esc(step["tactic"])}</span>{low}'
-            f'<b>{number}.</b> {esc(step["text"])}')
+            f'{esc(step["text"])}')
     text_column.markdown(body, unsafe_allow_html=True)
     with details_column.popover("Details", key=f"moment-{number}", width="stretch"):
         show_raw_events(step["event_ids"])
@@ -277,7 +296,8 @@ with tabs[0]:
         for phase, items in plan.items():
             note = f" <span>({PHASE_HELP[phase]})</span>" if phase in PHASE_HELP else ""
             st.markdown(f'<div class="phase">{phase}{note}</div>', unsafe_allow_html=True)
-            st.markdown("\n".join(f"- {esc(item)}" for item in items))
+            # unsafe_allow_html lets the <code> tags from esc() through; esc() already escaped the text.
+            st.markdown("\n".join(f"- {esc(item)}" for item in items), unsafe_allow_html=True)
 
 
 # ---------- Findings ----------
@@ -355,7 +375,7 @@ with tabs[2]:
             if notes:
                 with st.expander("What each source said"):
                     for value, note in notes:
-                        st.markdown(f"**{esc(value)}**: {esc(note)}")
+                        st.markdown(f"**{esc(value)}**: {esc(note)}", unsafe_allow_html=True)
 
         if other:
             st.subheader("Other IOCs")
@@ -383,26 +403,50 @@ def h(text):
 
 
 with tabs[3]:
-    tree_rows = graph.build_process_tree(events, findings, steps)
+    tree_rows = graph.build_process_tree(events, findings, steps, zone)
     if not tree_rows:
         st.info("No attack steps, so there is no process tree to show.")
     else:
+        # Each 4-character piece of the prefix ("│   ", "├── ", "└── ", "    ") becomes one CSS shape.
+        SEGMENT_CLASS = {"│   ": "bar", "├── ": "tee", "└── ": "end", "    ": "blank"}
         lines = []
         for row in tree_rows:
+            pieces = [row["prefix"][i:i + 4] for i in range(0, len(row["prefix"]), 4)]
+            tree_lines = "".join(f'<span class="seg {SEGMENT_CLASS[piece]}"></span>' for piece in pieces)
             detail = f'<span class="detail">{h(row["detail"])}</span>' if row["detail"] else ""
-            meta = f'<span class="meta">{h(row["meta"])}</span>' if row["meta"] else ""
             tactic = f'<span class="chip chip-tactic">{h(row["step"])}</span>' if row["step"] else ""
-            # Each level deeper is indented 1.6rem more and starts with "└─"; the text wraps under itself.
-            indent = max(row["depth"] - 1, 0) * 1.6
-            marker = "└─ " if row["depth"] > 0 else ""
-            lines.append(f'<div class="line {row["kind"]}" style="margin-left: {indent}rem">'
-                         f'<span class="prefix">{marker}</span>'
-                         f'<span class="text"><span class="label">{h(row["label"])}</span>'
-                         f'{detail}{meta}{tactic}</span></div>')
+            # Column 1: the tree lines and the name, which wraps under itself.
+            # Column 2: the time. Column 3: the details, then the blue tactic chip.
+            lines.append(f'<div class="line {row["kind"]}">'
+                         f'<span class="tree">{tree_lines}'
+                         f'<span class="text"><span class="label">{h(row["label"])}</span></span></span>'
+                         f'<span class="time">{h(row["time"])}</span>'
+                         f'<span class="info">{detail}{tactic}</span></div>')
         st.markdown(f'<div class="ptree">{"".join(lines)}</div>', unsafe_allow_html=True)
 
 
 # ---------- Timeline ----------
+
+def stack_timeline_row(row):
+    """A copy of one Timeline row for the page, with short values on two lines so the Event
+    column gets the room:
+      '2023-12-13 10:53:32'                               -> '2023-12-13' / '10:53:32'
+      '1 – Process Create'                                -> '1' / 'Process Create'
+      'Execution · T1204.002 User Execution: Malicious File' -> 'T1204.002' / 'Execution · User Execution: ...'
+    The CSV export keeps the original one-line values."""
+    time_name = list(row)[0]  # "Time (UTC)" or "Local time"
+    event_number, event_name = row["Sysmon Event ID"].split(" – ", 1)
+    tag = row["MITRE ATT&CK"]
+    if " · " in tag:  # tactic and technique: put the technique code on top
+        tactic, technique = tag.split(" · ", 1)
+        code, technique_name = technique.split(" ", 1)
+        tag = f"{code}\n{tactic} · {technique_name}"
+    return {time_name: row[time_name].replace(" ", "\n"),
+            "Sysmon Event ID": f"{event_number}\n{event_name}",
+            "MITRE ATT&CK": tag,
+            "Event": row["Event"],
+            "Event #": row["Event #"]}
+
 
 with tabs[4]:
     # Only the events that lead to the incident (the events behind the attack story).
@@ -412,7 +456,9 @@ with tabs[4]:
     else:
         st.caption(f"{len(rows):,} incident events. {time_note}. "
                    "The Sysmon Event ID can be searched as-is in any SIEM.")
-        html_table(rows, short_columns=(list(rows[0])[0], "Sysmon Event ID", "Event #"))
+        html_table([stack_timeline_row(r) for r in rows],
+                   short_columns=(list(rows[0])[0], "Event #"),
+                   narrow_columns=("Sysmon Event ID", "MITRE ATT&CK"))
 
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
@@ -438,6 +484,7 @@ with tabs[5]:
     chosen = st.multiselect("Show", labels, default=[l for l in labels if l != "internal name"])
     shown = [r for r in domain_rows if r["label"] in chosen]
     time_column = "Time (UTC)" if zone is None else "Local time"
-    html_table([{time_column: f"{in_zone(r['time'], zone):%Y-%m-%d %H:%M:%S}", "Domain": r["domain"],
+    # Date above time ("\n"), like the Timeline, so the Domain column gets the room.
+    html_table([{time_column: f"{in_zone(r['time'], zone):%Y-%m-%d\n%H:%M:%S}", "Domain": r["domain"],
                  "Label": r["label"], "Program": r["program"], "Event #": r["event_id"]} for r in shown],
                short_columns=(time_column, "Event #"))

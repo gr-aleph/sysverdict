@@ -20,8 +20,9 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
               triage/enrich.py ──HTTP──> hash / IP / DNS backends (127.0.0.1) ──> public threat-intel sources
 ```
 
-- **Where the log goes:** it is read in memory; a temporary copy needed by python-evtx is deleted right after
-  parsing. Nothing is stored. CSV and JSON files exist only when the analyst downloads them.
+- **Where the log goes:** it stays on this computer. python-evtx can only read a file, so a temporary copy is
+  written to the Windows Temp folder, read, and deleted right after parsing (also when parsing fails); the
+  results are kept in memory while the app runs. Nothing is stored. CSV and JSON files exist only when the analyst downloads them.
 - **What leaves the machine:** nothing in offline mode (the default). Otherwise, only after the analyst presses
   *Enrich IOCs*: SHA256 hashes, public IPv4 addresses and public domains of flagged programs, sent to the local
   backends. Raw events, usernames, hostnames, paths, registry keys, private IPs, IPv6 and internal names are
@@ -42,6 +43,8 @@ Connection errors, timeouts, non-JSON replies and answers with an unexpected sha
 
 ## Decisions
 
+- **Streamlit:** the rest of the tool is Python, and Streamlit gives a local, private web app in the same
+  language with upload, tabs and export built in, so the effort goes into the detection logic.
 - **Verdict from named findings, not a numeric score:** a list of findings with their events tells the analyst what to do and can be verified.
 - **High and low confidence:** one high-confidence finding means Malicious; low-confidence findings alone only mean Suspicious, so normal installers do not raise false alarms.
 - **Short, readable checks:** each check is one function that can be reviewed on its own; they target common attacker behaviour, not every technique.

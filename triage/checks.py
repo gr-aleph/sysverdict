@@ -175,11 +175,16 @@ def edit_distance(a, b):
 
 
 def add_finding(found, key, event, check, title, strength, process, detail, guid=""):
-    """Add an event to a finding. Events with the same key are grouped into one finding."""
+    """Add an event to a finding. Events with the same key are grouped into one finding.
+    A Strong event makes a Weak finding Strong, and its detail and program replace the Weak ones
+    (e.g. a malware lookup of a lookalike domain after a browser lookup of it)."""
     if key not in found:
         found[key] = {"check": check, "title": title, "strength": strength,
                       "time": event["time"], "process": process, "process_guid": guid,
                       "detail": detail, "event_ids": []}
+    elif strength == "Strong" and found[key]["strength"] == "Weak":
+        found[key].update({"strength": "Strong", "process": process, "process_guid": guid,
+                           "detail": detail})
     found[key]["event_ids"].append(event["record_id"])
 
 

@@ -4,6 +4,10 @@ from tests.fixtures.events import USER, attack_events, benign_events, event
 from triage import story
 from triage.checks import make_verdict, run_checks
 
+# The MITRE ATT&CK tactics the story may use.
+TACTICS = ["Initial Access", "Execution", "Persistence", "Defense Evasion", "Credential Access",
+           "Discovery", "Command and Control", "Impact"]
+
 
 def steps_of(events):
     return story.build_steps(events, run_checks(events))
@@ -104,7 +108,7 @@ def test_every_step_has_a_tag_proof_and_a_number():
     steps = steps_of(events)
     assert [s["number"] for s in steps] == list(range(1, len(steps) + 1))
     for s in steps:
-        assert s["tactic"] in story.TACTIC_ORDER
+        assert s["tactic"] in TACTICS
         assert s["event_ids"] and set(s["event_ids"]) <= ids
     assert all(s["technique"] for s in steps[1:])
 
@@ -132,8 +136,8 @@ def test_unrelated_low_findings_are_kept_apart():
 
 def test_page_shows_real_addresses_as_code_text():
     text = "Edge saved FireEye.exe from https://www.fireeyee.com/a.exe, then called 167.172.71.11:80"
-    assert story.code_addresses(text) == ("Edge saved FireEye.exe from `https://www.fireeyee.com/a.exe`, "
-                                          "then called `167.172.71.11:80`")
+    assert story.code_addresses(text) == ("Edge saved FireEye.exe from <code>https://www.fireeyee.com/a.exe</code>, "
+                                          "then called <code>167.172.71.11:80</code>")
     assert story.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
 
 
@@ -144,6 +148,16 @@ def test_next_steps_use_nist_phases():
     assert list(plan) == [p for p in story.PHASES if p in plan]
     assert {"Investigate", "Contain", "Eradicate", "Recover"} <= set(plan)
     assert any("www.fireeyee.com" in step for step in plan["Contain"])
+
+
+def test_download_site_host_without_a_path():
+    malicious = {"label": "Malicious", "reason": ""}
+    no_path = [{"kind": "origin", "technique": "",
+                "text": "The user downloaded a.exe with Edge from https://a.com, from the page https://b.com/."}]
+    with_path = [{"kind": "origin", "technique": "",
+                  "text": "The user downloaded a.exe with Edge from https://www.a.com/x/a.exe."}]
+    assert "Block the download site a.com at the web proxy." in story.next_steps([], malicious, no_path)["Contain"]
+    assert "Block the download site www.a.com at the web proxy." in story.next_steps([], malicious, with_path)["Contain"]
 
 
 def test_benign_next_steps_are_investigate_only():

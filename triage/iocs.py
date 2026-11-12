@@ -16,7 +16,7 @@ never leave the machine. This filter runs before any HTTP call.
 import ipaddress
 import re
 
-from triage.checks import file_name, is_windows_program
+from triage.checks import is_windows_program
 
 # Regular expressions (patterns for finding text). Reading guide:
 #   ? = the character before is optional   + = one or more   [^...] = any character except these
@@ -212,8 +212,3 @@ def extract_iocs(events, findings):
 
     order = ["sha256", "ip", "domain", "url", "email", "imphash", "file", "registry"]
     return sorted(iocs.values(), key=lambda i: (order.index(i["type"]), i["value"]))
-
-
-def short_name(path):
-    """Program name for display: 'C:\\...\\FireEye.exe' -> 'FireEye.exe'."""
-    return file_name(path) if path else ""

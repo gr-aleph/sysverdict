@@ -51,14 +51,16 @@ ADDRESS = re.compile(f"{URL}|{DOMAIN_OR_IP.pattern}", re.IGNORECASE)
 
 
 def code_addresses(text):
-    """Wrap URLs, domains and IPs in `code` marks for the page: shown exactly as in the log,
-    but Streamlit never turns code text into a clickable link. File names are left alone."""
+    """Wrap URLs, domains and IPs in <code> tags for the page: shown exactly as in the log,
+    but never turned into a clickable link. File names are left alone.
+    HTML tags (not Markdown backticks) work both in Markdown text and inside HTML blocks
+    such as the Findings cards, where Markdown is not processed."""
     def wrap(match):
         token = match.group(0)
         is_url = token.lower().startswith("http")
         if not is_url and token.rsplit(".", 1)[-1].lower() in FILE_ENDINGS:
             return token
-        return f"`{token}`"
+        return f"<code>{token}</code>"
     return ADDRESS.sub(wrap, text)
 
 
@@ -116,8 +118,6 @@ SENTENCES = {
     "network_from_user_folder": "{detail}, a server on the internet (possible command and control).",
 }
 
-TACTIC_ORDER = ["Initial Access", "Execution", "Persistence", "Defense Evasion", "Credential Access",
-                "Discovery", "Command and Control", "Impact"]
 PHASES = ["Investigate", "Contain", "Eradicate", "Recover"]  # NIST SP 800-61 incident response
 
 
@@ -510,9 +510,12 @@ def next_steps(findings, verdict, steps=()):
                 for phase, text in actions:
                     add(phase, text)
         for step in steps:
-            if step.get("kind") == "origin" and "://" in step["text"]:
-                host = step["text"].split("://", 1)[1].split("/", 1)[0]
-                add("Contain", f"Block the download site {host} at the web proxy.")
+            # The host of the download address: the characters after "://" up to the first
+            # "/", space, comma, quote or bracket ([^...]+ = one or more characters NOT in the list),
+            # so "https://a.com, from the page ..." gives "a.com".
+            found = re.search(r"://([^/\s,;'\"()`]+)", step["text"]) if step.get("kind") == "origin" else None
+            if found:
+                add("Contain", f"Block the download site {found.group(1)} at the web proxy.")
             if step.get("technique", "").startswith("T1566.001"):
                 add("Investigate", "Find the email and remove it from every mailbox.")
         if verdict["label"] == "Malicious":
