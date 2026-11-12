@@ -242,12 +242,12 @@ tabs = st.tabs(["Summary", "Findings", "IOCs", "Process tree", "Timeline", "Doma
 
 
 def step_row(clock, step, number):
-    """One key event: time, ATT&CK tactic (technique on hover), number, sentence, Details button."""
+    """One key event: number, time, ATT&CK tactic (technique on hover), sentence, Details button."""
     text_column, details_column = st.columns([5, 1])
     low = '<span class="chip chip-Weak">LOW CONFIDENCE</span>' if step["confidence"] == "Low" else ""
-    body = (f'<span class="clock">{clock}</span>'
+    body = (f'<b>{number}.</b> <span class="clock">{clock}</span>'
             f'<span class="chip chip-tactic" title="{html.escape(step["technique"])}">{esc(step["tactic"])}</span>{low}'
-            f'<b>{number}.</b> {esc(step["text"])}')
+            f'{esc(step["text"])}')
     text_column.markdown(body, unsafe_allow_html=True)
     with details_column.popover("Details", key=f"moment-{number}", width="stretch"):
         show_raw_events(step["event_ids"])
