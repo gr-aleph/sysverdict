@@ -26,7 +26,15 @@ HASH_TIMEOUT = (2, 30)    # the hash backend itself gives up after 12 s
 IP_TIMEOUT = (2, 30)      # three sources one after another
 DOMAIN_TIMEOUT = (2, 75)  # crt.sh alone can take about 60 s
 
-MAX_HASHES_PER_RUN = 4    # VirusTotal's free tier allows 4 lookups a minute
+# Most new lookups sent per press of "Enrich" (cached answers don't count). The rest wait
+# for "Enrich more", so one big log cannot flood the backends or their free-tier limits.
+MAX_NEW_PER_RUN = {"sha256": 4,   # VirusTotal's free tier allows 4 lookups a minute
+                   "ip": 20,
+                   "domain": 20}
+WAIT_NOTES = {"sha256": "waiting: VirusTotal allows 4 hashes a minute, press Enrich more in a minute",
+              "ip": "waiting: at most 20 new IPs per run, press Enrich more to continue",
+              "domain": "waiting: at most 20 new domains per run, press Enrich more to continue"}
+SOURCES = {"sha256": "hash backend", "ip": "IP backend", "domain": "DNS backend"}
 
 # Results kept in memory while the app runs: (type, value) -> result. Errors are never kept.
 _cache = {}
@@ -108,7 +116,14 @@ def ask(url, timeout, reader, source):
         body = response.json()
     except ValueError:
         return not_enriched("the answer was not JSON", source)
-    return reader(response.status_code, body)
+    # Every backend answers with a JSON object (a dict). Anything else, or a dict with missing
+    # fields, means the backend changed: say so instead of crashing the page.
+    if not isinstance(body, dict):
+        return not_enriched("the backend's answer had an unexpected shape", source)
+    try:
+        return reader(response.status_code, body)
+    except (KeyError, TypeError, AttributeError):
+        return not_enriched("the backend's answer had an unexpected shape", source)
 
 
 def enrich_one(ioc):
@@ -138,22 +153,22 @@ def enrich_one(ioc):
 def enrich_all(iocs, on_progress=None):
     """Enrich every allowed IOC. Returns {(type, value): result}.
 
-    At most MAX_HASHES_PER_RUN new hashes are sent per run (cached ones don't count);
-    the rest are marked so the analyst can press "Enrich more" a minute later.
+    At most MAX_NEW_PER_RUN new lookups of each type are sent per run (4 hashes, 20 IPs,
+    20 domains; cached ones don't count). The rest are marked so the analyst can press
+    "Enrich more" later.
     """
     results = {}
-    hashes_sent = 0
+    sent = {"sha256": 0, "ip": 0, "domain": 0}  # new lookups sent in this run, per type
     to_do = [i for i in iocs if i["type"] in ("sha256", "ip", "domain")]
     for number, ioc in enumerate(to_do, start=1):
         key = (ioc["type"], ioc["value"])
         if on_progress:
             on_progress(number, len(to_do), ioc)
-        if ioc["type"] == "sha256" and ioc["enrich"] and key not in _cache:
-            if hashes_sent >= MAX_HASHES_PER_RUN:
-                results[key] = not_enriched("waiting: VirusTotal allows 4 hashes a minute, "
-                                            "press Enrich more in a minute", "hash backend")
+        if ioc["enrich"] and key not in _cache:
+            if sent[ioc["type"]] >= MAX_NEW_PER_RUN[ioc["type"]]:
+                results[key] = not_enriched(WAIT_NOTES[ioc["type"]], SOURCES[ioc["type"]])
                 continue
-            hashes_sent += 1
+            sent[ioc["type"]] += 1
         results[key] = enrich_one(ioc)
     return results
 

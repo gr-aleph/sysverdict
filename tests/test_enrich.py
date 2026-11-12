@@ -114,6 +114,17 @@ def test_answer_that_is_not_json(monkeypatch):
     assert enrich.enrich_one(ioc("sha256", "a" * 64))["note"] == "the answer was not JSON"
 
 
+def test_answer_with_an_unexpected_shape(monkeypatch):
+    # A JSON list instead of an object.
+    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/hash/": (200, ["not", "a", "dict"])}))
+    assert enrich.enrich_one(ioc("sha256", "a" * 64))["note"] == "the backend's answer had an unexpected shape"
+    # An object whose "verdict" has no "label".
+    monkeypatch.setattr(enrich.requests, "get", fake_get({"/api/v1/hash/": (200, {"verdict": {"score": 5}})}))
+    result = enrich.enrich_one(ioc("sha256", "b" * 64))
+    assert result["status"] == "not enriched"
+    assert result["note"] == "the backend's answer had an unexpected shape"
+
+
 def test_blocked_ioc_is_never_sent(monkeypatch):
     get = fake_get({})
     monkeypatch.setattr(enrich.requests, "get", get)
@@ -137,6 +148,19 @@ def test_at_most_four_new_hashes_per_run_and_results_are_cached(monkeypatch):
     second = enrich.enrich_all(hashes)  # the 4 cached ones cost nothing; the last 2 are sent now
     assert len(get.calls) == 6
     assert all(r["status"] == "enriched" for r in second.values())
+
+
+def test_at_most_twenty_new_ips_and_domains_per_run(monkeypatch):
+    get = fake_get({"/api/ip/": load_backend_answer("ip_ok.json"),
+                    "/api/v1/domain/": load_backend_answer("domain_ok.json")})
+    monkeypatch.setattr(enrich.requests, "get", get)
+    ips = [ioc("ip", f"8.8.{n}.1") for n in range(22)]
+    domains = [ioc("domain", f"site{n}.example.com") for n in range(22)]
+
+    results = enrich.enrich_all(ips + domains)
+    assert len(get.calls) == 40  # 20 IPs + 20 domains
+    waiting = [r for r in results.values() if "press Enrich more" in r["note"]]
+    assert len(waiting) == 4     # 2 IPs + 2 domains wait for the next run
 
 
 def test_errors_are_not_cached(monkeypatch):
