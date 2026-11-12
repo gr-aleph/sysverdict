@@ -195,3 +195,26 @@ def test_more_password_forms_are_hidden():
         "curl https://bob:****@files.example.com/a"
     assert hide_secrets("curl -u bob:Secret1 https://x.example.com") == "curl -u bob:**** https://x.example.com"
     assert hide_secrets("Sysmon64.exe -u force") == "Sysmon64.exe -u force"
+
+
+# ---------- Block 3: encoding does not hide a command from the rule lists ----------
+
+def encoded(script):
+    import base64
+    return "powershell -NoProfile -EncodedCommand " + base64.b64encode(script.encode("utf-16-le")).decode()
+
+
+def test_encoded_shadow_copy_deletion_is_strong():
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS,
+                    CommandLine=encoded("vssadmin delete shadows /all /quiet"))]
+    findings = [f for f in run_checks(events) if f["check"] == "evidence_removal"]
+    assert [f["strength"] for f in findings] == ["Strong"]
+    assert "decoded command: vssadmin delete shadows" in findings[0]["detail"]
+
+
+def test_encoded_new_account_is_found_with_the_password_hidden():
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS,
+                    CommandLine=encoded("net user bob Winter2026! /add"))]
+    findings = run_checks(events)
+    assert [f["check"] for f in findings] == ["access_change"]
+    assert "Winter2026!" not in findings[0]["detail"]

@@ -561,17 +561,25 @@ TOOL_DOWNLOAD_RULES = [
 def check_by_rules(events, check, title, strength, rules, skip_programs=()):
     """Shared by the command-line checks: one finding per program and rule, with the rule's
     own ATT&CK tag (so a PsExec line and a WMI line get different techniques).
-    Programs in skip_programs are never checked (e.g. a browser reading its own password store)."""
+    Programs in skip_programs are never checked (e.g. a browser reading its own password store).
+    For PowerShell, the hidden text of an encoded command is searched too, so encoding cannot
+    hide a command from these checks (ATT&CK T1027 Obfuscated Files or Information)."""
     found = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in skip_programs:
             continue
         command = e.get("CommandLine", "")
+        shown = command
+        if file_name(e.get("Image")) in ("powershell.exe", "pwsh.exe"):
+            decoded = decode_powershell(command)
+            if decoded:
+                command = command + " " + decoded
+                shown = "decoded command: " + decoded
         for pattern, what, tactic, technique in rules:
             if pattern.search(command):
                 key = (file_name(e.get("Image")), what)
                 add_finding(found, key, e, check, title, strength, e.get("Image", ""),
-                            f"{file_name(e.get('Image'))} {what}: {command[:180]}", e.get("ProcessGuid", ""))
+                            f"{file_name(e.get('Image'))} {what}: {shown[:180]}", e.get("ProcessGuid", ""))
                 found[key]["tactic"], found[key]["technique"] = tactic, technique
                 break  # one rule per command line is enough
     return list(found.values())
