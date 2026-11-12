@@ -97,9 +97,13 @@ NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
 # "powershell -EncodedCommand aQB3AHIA...". Group 1 is the base64 text.
 ENCODED_COMMAND = re.compile(r"\s-e[a-z]*\s+([a-z0-9+/=]{20,})", re.IGNORECASE)
 # Downloading text or a file from the internet: the WebClient methods, Invoke-WebRequest
-# (alias iwr), Invoke-RestMethod (alias irm), BITS.
+# (aliases iwr, and curl/wget in Windows PowerShell 5), Invoke-RestMethod (alias irm), BITS.
 PS_DOWNLOAD = re.compile(r"downloadstring|downloadfile|downloaddata|net\.webclient|invoke-webrequest|"
-                         r"\biwr\b|invoke-restmethod|\birm\b|start-bitstransfer")
+                         r"\biwr\b|\bcurl\b|\bwget\b|invoke-restmethod|\birm\b|start-bitstransfer")
+# The official one-line installers of the Chocolatey and Scoop package managers download a
+# script and run it (documented on chocolatey.org and scoop.sh). Admins paste these every day:
+# Low, not High. Only these exact sources; any other download-and-run stays as judged.
+OFFICIAL_INSTALLERS = re.compile(r"community\.chocolatey\.org/install\.ps1|get\.scoop\.sh")
 # Running text as code: Invoke-Expression (alias iex).
 PS_RUN_TEXT = re.compile(r"\biex\b|invoke-expression")
 # Turning base64 text back into code inside the script.
@@ -114,8 +118,17 @@ DOUBLE_EXTENSION = re.compile(
     r"\.(exe|scr|com|bat|cmd|vbs|js|pif)$")
 
 # Words typical of ransom-note file names, e.g. "RANSOM.txt", "how_to_recover.html",
-# "restore-files.txt". [_ -]? allows an optional underscore, space or dash between words.
-RANSOM_NOTE = re.compile(r"ransom|decrypt|how[_ -]?to[_ -]?(recover|restore)|restore[_ -]?files")
+# "restore-files.txt", "RESTORE_MY_FILES.txt". [_ -]? allows an optional underscore, space or
+# dash between words. ("readme" is not on the list: every installer writes a readme.txt.)
+RANSOM_NOTE = re.compile(r"ransom|decrypt|how[_ -]?to[_ -]?(recover|restore)|restore[_ -]?(my[_ -]?)?files")
+
+# A Windows path such as C:\Users\x\report.pdf inside a command line (it ends at a quote,
+# a space or the end of the text, so "video.mp4.exe" is read whole).
+# Pieces: [a-z]:\\ = drive letter and backslash; [^\"]+? = the shortest run of characters
+# that are not quotes; \.[a-z0-9]{2,4} = a file ending of 2-4 characters; (?=[\"\s]|$) =
+# "followed by a quote, a space or the end", without including that character.
+# (Also used by iocs.py and story.py.)
+FILE_IN_TEXT = re.compile(r"[a-z]:\\[^\"]+?\.[a-z0-9]{2,4}(?=[\"\s]|$)", re.IGNORECASE)
 
 
 # ---------- small helpers ----------
@@ -261,7 +274,9 @@ def check_suspicious_powershell(events, context):
         downloads = bool(PS_DOWNLOAD.search(everything))
         runs_text = bool(PS_RUN_TEXT.search(everything))
         decodes = bool(PS_DECODE.search(everything))
-        if runs_text and (downloads or decodes):
+        if runs_text and (downloads or decodes) and OFFICIAL_INSTALLERS.search(everything):
+            strength, title = "Weak", "PowerShell ran a package manager's official installer"
+        elif runs_text and (downloads or decodes):
             strength, title = "Strong", "PowerShell downloaded and ran code"
         elif downloads or runs_text or decodes:
             strength, title = "Weak", "PowerShell download or hidden code"
@@ -437,7 +452,10 @@ def check_ransom_note(events, context):
         if e["event_id"] == 11:
             names = [file_name(text)]
         else:
+            # Words of the command line ("notepad RANSOM.txt") and full paths, which may contain
+            # spaces ("C:\Users\a\Desktop\HOW TO RECOVER.txt").
             names = [file_name(part.strip('"')) for part in text.split()]
+            names += [file_name(path) for path in FILE_IN_TEXT.findall(text)]
         is_note = False
         for name in names:
             if name.endswith(NOTE_ENDINGS) and RANSOM_NOTE.search(name):
@@ -671,7 +689,9 @@ DEFENDER_REGISTRY = re.compile(r"\\windows defender\\(exclusions\\|.*disable)", 
 # The registry keys of known UAC bypasses: a program that Windows starts with admin rights
 # without asking (fodhelper.exe, eventvwr.exe) reads its "open" command from the user's own
 # registry, so writing that key gives admin rights silently. No legitimate use: Strong.
-UAC_BYPASS_KEY = re.compile(r"\\software\\classes\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
+# Matched anywhere in the key, so both "HKU\<SID>\Software\Classes\ms-settings\..." and the
+# "HKU\<SID>_Classes\ms-settings\..." form that Sysmon also writes are caught (ATT&CK T1548.002).
+UAC_BYPASS_KEY = re.compile(r"\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
 
 
 def check_credential_theft(events, context):

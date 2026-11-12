@@ -58,6 +58,53 @@ def benign_events():
     ]
 
 
+def it_day_events():
+    """A normal IT day: admin recon typed in Windows Terminal, an Intune script, a Defender
+    platform update, a driver update, Teams looking up its cloud.microsoft domain, and the
+    SCCM client asking LSASS for basic information (0x1000). None of it may be Malicious."""
+    sys32 = "C:\\Windows\\System32\\"
+    ps = sys32 + "WindowsPowerShell\\v1.0\\powershell.exe"
+    terminal = USER + "\\AppData\\Local\\Microsoft\\WindowsApps\\WindowsTerminal.exe"
+    intune = "C:\\Program Files (x86)\\Microsoft Intune Management Extension\\"
+    platform = "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.2-0\\"
+    driver = sys32 + "DriverStore\\FileRepository\\exampleaudio.inf_amd64_1\\ExampleAudioService.exe"
+    teams = USER + "\\AppData\\Local\\Microsoft\\WindowsApps\\ms-teams.exe"
+    return [
+        # Recon typed by a person in Windows Terminal
+        event(301, 1, "2026-03-02 08:30:00.000", ProcessGuid="{t-term}", ParentProcessGuid="{t-explorer}",
+              Image=terminal, ParentImage="C:\\Windows\\explorer.exe"),
+        event(302, 1, "2026-03-02 08:30:01.000", ProcessGuid="{t-ps}", ParentProcessGuid="{t-term}",
+              Image=ps, ParentImage=terminal, CommandLine="powershell.exe -NoLogo"),
+        event(303, 1, "2026-03-02 08:30:05.000", ProcessGuid="{t-who}", ParentProcessGuid="{t-ps}",
+              Image=sys32 + "whoami.exe", ParentImage=ps, CommandLine="whoami /groups"),
+        event(304, 1, "2026-03-02 08:30:09.000", ProcessGuid="{t-ip}", ParentProcessGuid="{t-ps}",
+              Image=sys32 + "ipconfig.exe", ParentImage=ps, CommandLine="ipconfig /all"),
+        event(305, 1, "2026-03-02 08:30:15.000", ProcessGuid="{t-si}", ParentProcessGuid="{t-ps}",
+              Image=sys32 + "systeminfo.exe", ParentImage=ps, CommandLine="systeminfo"),
+        # An Intune management script
+        event(310, 1, "2026-03-02 09:00:00.000", ProcessGuid="{i-ps}", ParentProcessGuid="{i-agent}",
+              Image=ps, ParentImage=intune + "AgentExecutor.exe",
+              CommandLine=f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{intune}Policies\\Scripts\\a1.ps1"'),
+        # A Defender platform update: new files and the service pointing at them
+        event(320, 11, "2026-03-02 10:00:00.000", ProcessGuid="{d-up}", Image=sys32 + "MpSigStub.exe",
+              TargetFilename=platform + "MsMpEng.exe"),
+        event(321, 13, "2026-03-02 10:00:01.000", ProcessGuid="{p-services}", Image=sys32 + "services.exe",
+              TargetObject="HKLM\\System\\CurrentControlSet\\Services\\WinDefend\\ImagePath",
+              Details=f'"{platform}MsMpEng.exe"'),
+        # A driver update from Windows Update
+        event(330, 11, "2026-03-02 10:30:00.000", ProcessGuid="{w-drv}", Image=sys32 + "drvinst.exe",
+              TargetFilename=driver),
+        event(331, 13, "2026-03-02 10:30:01.000", ProcessGuid="{p-services}", Image=sys32 + "services.exe",
+              TargetObject="HKLM\\System\\CurrentControlSet\\Services\\ExampleAudioService\\ImagePath",
+              Details=driver),
+        # Teams and the SCCM client
+        event(340, 22, "2026-03-02 11:00:00.000", ProcessGuid="{teams}", Image=teams,
+              QueryName="teams.cloud.microsoft"),
+        event(350, 10, "2026-03-02 11:30:00.000", SourceProcessGUID="{ccm}", SourceImage="C:\\Windows\\CCM\\CcmExec.exe",
+              TargetImage=sys32 + "lsass.exe", GrantedAccess="0x1000"),
+    ]
+
+
 def attack_events():
     """A fake 'security installer' from Downloads: Run key, recon burst, C2 connection, lookalike domain.
     Then a WordPad document that drops video.mp4.exe, installs a service and opens a ransom note."""

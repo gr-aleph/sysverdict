@@ -17,7 +17,7 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 
-from triage.checks import TWO_PART_ENDINGS, is_windows_program
+from triage.checks import FILE_IN_TEXT, TWO_PART_ENDINGS, is_windows_program
 
 # Regular expressions (patterns for finding text). Reading guide:
 #   ? = the character before is optional   + = one or more   [^...] = any character except these
@@ -33,13 +33,7 @@ INTERNAL_SUFFIXES = (".local", ".localdomain", ".lan", ".internal", ".corp", ".h
                      ".intranet", ".arpa", ".localhost", ".test", ".invalid")
 ENRICHABLE_TYPES = ("sha256", "ip", "domain")
 
-
-# A Windows path such as C:\Users\x\report.pdf inside a command line (it ends at a quote,
-# a space or the end of the text, so "video.mp4.exe" is read whole).
-# Pieces: [a-z]:\\ = drive letter and backslash; [^\"]+? = the shortest run of characters
-# that are not quotes; \.[a-z0-9]{2,4} = a file ending of 2-4 characters; (?=[\"\s]|$) =
-# "followed by a quote, a space or the end", without including that character.
-FILE_IN_TEXT = re.compile(r"[a-z]:\\[^\"]+?\.[a-z0-9]{2,4}(?=[\"\s]|$)", re.IGNORECASE)
+# FILE_IN_TEXT (a Windows path inside a command line) comes from checks.py.
 
 
 def flagged_processes(findings):

