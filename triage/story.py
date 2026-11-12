@@ -543,7 +543,7 @@ def next_steps(findings, verdict, steps=()):
             plan[phase].append(text)
 
     if verdict["label"] == "Benign":
-        add("Investigate", "Nothing known-bad was found by the 10 checks; this does not prove the "
+        add("Investigate", "Nothing known-bad was found by the checks; this does not prove the "
                            "computer is clean. Keep this result with the ticket.")
         add("Investigate", "If the user still reports a problem, collect a longer log and run it again.")
     else:

@@ -197,7 +197,7 @@ def events_of(events, event_id):
     return [e for e in events if e["event_id"] == event_id]
 
 
-# ---------- the 10 checks ----------
+# ---------- the checks (each one is listed in ALL_CHECKS at the end) ----------
 
 def check_document_app_spawns_program(events, context):
     """Strong: Word, Excel, WordPad, a PDF reader... starts a shell or a program from a user folder."""

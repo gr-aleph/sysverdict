@@ -201,5 +201,5 @@ def test_download_site_host_without_a_path():
 def test_benign_next_steps_are_investigate_only():
     plan = story.next_steps([], make_verdict([]))
     assert list(plan) == ["Investigate"]
-    assert plan["Investigate"][0].startswith("Nothing known-bad was found by the 10 checks; "
+    assert plan["Investigate"][0].startswith("Nothing known-bad was found by the checks; "
                                              "this does not prove the computer is clean.")

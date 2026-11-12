@@ -2,7 +2,7 @@
 
 Run with:  .venv\\Scripts\\python -m streamlit run app.py
 
-Flow: upload a .evtx -> parse -> 10 checks -> verdict -> story (steps with MITRE ATT&CK tags),
+Flow: upload a .evtx -> parse -> checks -> verdict -> story (steps with MITRE ATT&CK tags),
 next steps (NIST phases), findings, IOCs, process tree, timeline, domains.
 Enrichment is optional and off by default (offline mode).
 """
@@ -207,7 +207,7 @@ if uploaded is None and sample is None:
     left.markdown('<div class="card"><div class="title">1. Upload</div>Export the Sysmon log '
                   '(Event Viewer, or <code>wevtutil epl Microsoft-Windows-Sysmon/Operational '
                   'host.evtx</code>) and drop it in the sidebar.</div>', unsafe_allow_html=True)
-    middle.markdown('<div class="card"><div class="title">2. Triage</div>10 checks look for known '
+    middle.markdown('<div class="card"><div class="title">2. Triage</div>Detection checks look for known '
                     'attack behaviour. Every finding points to the exact events behind it.</div>',
                     unsafe_allow_html=True)
     right.markdown('<div class="card"><div class="title">3. Act</div>Get a verdict, the attack story '
@@ -279,7 +279,7 @@ with tabs[0]:
     with left:
         st.subheader("Events")
         if not moments:
-            st.markdown("None of the 10 checks matched. Nothing known-bad is visible in this log; "
+            st.markdown("None of the checks matched. Nothing known-bad is visible in this log; "
                         "that does not prove the computer is clean.")
         else:
             st.caption(f"Key events of the incident. {time_note}. Details shows the Event # "
@@ -314,7 +314,7 @@ def finding_card(f, key):
 
 with tabs[1]:
     if not findings:
-        st.success("None of the 10 checks matched. Nothing known-bad is visible in this log.")
+        st.success("None of the checks matched. Nothing known-bad is visible in this log.")
     attack = sorted(strong + attack_low, key=lambda f: f["time"]) if strong else []
     if attack:
         st.subheader("Part of the attack")
