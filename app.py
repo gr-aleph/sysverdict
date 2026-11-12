@@ -206,15 +206,12 @@ if uploaded is None and sample is None:
                 unsafe_allow_html=True)
     st.markdown(f"### {TAGLINE}")
     left, middle, right = st.columns(3)
-    left.markdown('<div class="card"><div class="title">1. Upload</div>Export the Sysmon log '
-                  '(Event Viewer, or <code>wevtutil epl Microsoft-Windows-Sysmon/Operational '
-                  'host.evtx</code>) and drop it in the sidebar.</div>', unsafe_allow_html=True)
-    middle.markdown('<div class="card"><div class="title">2. Triage</div>Detection checks look for known '
-                    'attack behaviour. Every finding points to the exact events behind it.</div>',
+    left.markdown('<div class="card"><div class="title">1. Upload</div>Sysmon logs only (.evtx). '
+                  'Other Windows event logs are not supported.</div>', unsafe_allow_html=True)
+    middle.markdown('<div class="card"><div class="title">2. Analyze</div>Detects known attacker behavior.</div>',
                     unsafe_allow_html=True)
-    right.markdown('<div class="card"><div class="title">3. Act</div>Get a verdict, the attack story '
-                   'with MITRE ATT&amp;CK tags, next steps and IOCs for the ticket.</div>',
-                   unsafe_allow_html=True)
+    right.markdown('<div class="card"><div class="title">3. Respond</div>An evidence-backed verdict with clear '
+                   'next steps and IOCs.</div>', unsafe_allow_html=True)
     st.stop()
 
 
