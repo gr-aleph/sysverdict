@@ -1,0 +1,49 @@
+{
+  "status_code": 200,
+  "body": {
+    "hash": "1111111111111111111111111111111111111111",
+    "hash_type": "sha1",
+    "sources": {
+      "virustotal": {
+        "status": "ok",
+        "data": {
+          "malicious": 49,
+          "suspicious": 0,
+          "harmless": 0,
+          "undetected": 15,
+          "type_description": "ELF",
+          "names": [
+            "bin.sh",
+            "r01km93o.exe",
+            "w5yhz6.exe",
+            "i.elf"
+          ],
+          "first_submission_date": "2026-04-17 11:50:24 UTC",
+          "link": "https://www.virustotal.com/gui/file/add97f691f8bd8af5efe0480a90f12bcdcfa089f7432088b4ff8bd0606ff58de"
+        },
+        "error": null
+      },
+      "malwarebazaar": {
+        "status": "not_found",
+        "data": null,
+        "error": null
+      },
+      "threatfox": {
+        "status": "error",
+        "data": null,
+        "error": "ThreatFox rejected the API key (HTTP 403)"
+      }
+    },
+    "verdict": {
+      "score": 90,
+      "label": "malicious",
+      "reasons": [
+        "VirusTotal: 49 engines say malicious",
+        "ThreatFox failed, so this verdict may be incomplete."
+      ],
+      "failed_sources": [
+        "threatfox"
+      ]
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "status_code": 200,
+  "body": {
+    "hash": "add97f691f8bd8af5efe0480a90f12bcdcfa089f7432088b4ff8bd0606ff58de",
+    "hash_type": "sha256",
+    "sources": {
+      "virustotal": {
+        "status": "ok",
+        "data": {
+          "malicious": 49,
+          "suspicious": 0,
+          "harmless": 0,
+          "undetected": 15,
+          "type_description": "ELF",
+          "names": [
+            "bin.sh",
+            "r01km93o.exe",
+            "w5yhz6.exe",
+            "i.elf"
+          ],
+          "first_submission_date": "2026-04-17 11:50:24 UTC",
+          "link": "https://www.virustotal.com/gui/file/add97f691f8bd8af5efe0480a90f12bcdcfa089f7432088b4ff8bd0606ff58de"
+        },
+        "error": null
+      },
+      "malwarebazaar": {
+        "status": "ok",
+        "data": {
+          "signature": "Mirai",
+          "file_type": "elf",
+          "tags": [
+            "elf",
+            "Mirai"
+          ],
+          "first_seen": "2026-04-17 11:47:11",
+          "last_seen": "2026-07-14 08:24:54",
+          "origin_country": "DE"
+        },
+        "error": null
+      },
+      "threatfox": {
+        "status": "ok",
+        "data": {
+          "matches": [
+            {
+              "malware_printable": "Mirai",
+              "threat_type": "payload",
+              "confidence_level": 90,
+              "first_seen": "2026-11-05 19:57:10 UTC",
+              "malpedia": "https://malpedia.caad.fkie.fraunhofer.de/details/elf.mirai"
+            }
+          ]
+        },
+        "error": null
+      }
+    },
+    "verdict": {
+      "score": 90,
+      "label": "malicious",
+      "reasons": [
+        "VirusTotal: 49 engines say malicious",
+        "MalwareBazaar has this file as a malware sample (Mirai)",
+        "ThreatFox lists this hash as an indicator (score 90)"
+      ],
+      "failed_sources": []
+    }
+  }
+}

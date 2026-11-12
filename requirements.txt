@@ -1,0 +1,5 @@
+streamlit==1.67.0
+python-evtx==0.8.1
+requests==2.34.2
+tzdata==2026.6
+pytest==9.2.0

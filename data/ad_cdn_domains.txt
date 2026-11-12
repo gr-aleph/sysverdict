@@ -1,0 +1,48 @@
+# Known ad, analytics, CDN and telemetry domains (a lookup of the domain or any subdomain matches).
+# Used only to label DNS lookups as "likely background"; never used to decide the verdict.
+# ads and analytics
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+google-analytics.com
+googletagmanager.com
+adnxs.com
+criteo.com
+taboola.com
+outbrain.com
+scorecardresearch.com
+chartbeat.com
+quantummetric.com
+hotjar.com
+sharethis.com
+popin.cc
+survata.com
+sensic.net
+cheqzone.com
+geistm.com
+mc.yandex.ru
+mc.yandex.md
+scanalert.com
+mcafeeassets.com
+ucweb.com
+segment.io
+nr-data.net
+# CDNs
+akamaized.net
+akamaihd.net
+akamaitechnologies.com
+cloudfront.net
+azureedge.net
+azurefd.net
+cloudinary.com
+shortpixel.ai
+slatic.net
+gstatic.com
+googleapis.com
+jsdelivr.net
+fbcdn.net
+# Windows and browser telemetry
+msftconnecttest.com
+footprintdns.com
+sfx.ms
+events.data.microsoft.com

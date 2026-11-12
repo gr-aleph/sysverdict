@@ -1,0 +1,53 @@
+# Streamlit settings for SysVerdict.
+
+[browser]
+# Never send usage statistics to Streamlit.
+gatherUsageStats = false
+
+[server]
+# Listen on this computer only: the logs never leave it.
+address = "127.0.0.1"
+port = 8501
+# Serve the bundled fonts from ./static, so nothing is loaded from a CDN.
+enableStaticServing = true
+# Uploaded .evtx files are kept in memory only. 200 MB is Streamlit's default limit.
+maxUploadSize = 200
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#5CC8FF"              # crystal blue
+backgroundColor = "#0F1419"           # near-black slate
+secondaryBackgroundColor = "#1A2129"  # panels
+textColor = "#E6E1D6"                 # warm off-white
+font = "IBM Plex Sans, sans-serif"
+codeFont = "IBM Plex Mono, monospace"
+headingFont = "IBM Plex Sans, sans-serif"
+baseRadius = "6px"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Regular.ttf"
+weight = "400"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-SemiBold.ttf"
+weight = "600"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Bold.ttf"
+weight = "700"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-Regular.ttf"
+weight = "400"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-SemiBold.ttf"
+weight = "600"
