@@ -351,8 +351,9 @@ TOOL_PURPOSE = {"whoami.exe": "shows the logged-on user", "ipconfig.exe": "shows
 SHELLS = ("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe")
 
 
-def narrate(e, processes):
-    """One sentence that tells what this event means in the story, with light technical detail."""
+def narrate(e, processes, process_images):
+    """One sentence that tells what this event means in the story, with light technical detail.
+    processes: process-create events by ProcessGuid; process_images: every started program path (lowercase)."""
     event_id = e["event_id"]
     program = display_name(e.get("Image") or e.get("SourceImage")) or "A program"
     if event_id == 1:
@@ -390,7 +391,7 @@ def narrate(e, processes):
         return f"{program} marked {target} as downloaded from the internet."
     if event_id == 11:
         target = e.get("TargetFilename", "")
-        if target.lower() in {p.get("Image", "").lower() for p in processes.values()}:
+        if target.lower() in process_images:
             return f"{program} dropped {target}, which runs later in the attack."
         return f"{program} created the file {target}."
     if event_id in (12, 13, 14):
@@ -417,15 +418,19 @@ def attack_tag(step):
     return step["tactic"]
 
 
-def story_rows(events, steps, zone_name=None, include_all=False):
+def story_rows(events, steps, zone_name=None):
     """Timeline table rows: Time, Sysmon Event ID, MITRE ATT&CK, Event (one story sentence), Event #.
 
     MITRE ATT&CK is the tactic and technique of the story step the event belongs to
-    ("Execution · T1204.002 User Execution: Malicious File"), empty for other events.
+    ("Execution · T1204.002 User Execution: Malicious File").
 
-    By default only the events behind the story steps; include_all adds every other event.
+    Only the events that lead to the incident are listed: the events behind the story steps.
     """
     processes = {e["ProcessGuid"]: e for e in events if e["event_id"] == 1 and e.get("ProcessGuid")}
+    # Every started program, built once here (narrate() checks dropped files against it).
+    process_images = set()
+    for p in processes.values():
+        process_images.add(p.get("Image", "").lower())
     step_of = {}
     for s in steps:
         for event_id in s["event_ids"]:
@@ -444,12 +449,12 @@ def story_rows(events, steps, zone_name=None, include_all=False):
     rows = []
     for e in events:
         step = step_of.get(e["record_id"], "")
-        if not step and not include_all:
-            continue
+        if not step:
+            continue  # not part of the incident
         rows.append({column: in_zone(e["time"], zone_name).strftime("%Y-%m-%d %H:%M:%S"),
                      "Sysmon Event ID": event_label(e["event_id"]),
                      "MITRE ATT&CK": step,
-                     "Event": narrate(e, processes),
+                     "Event": narrate(e, processes, process_images),
                      "Event #": e["record_id"]})
     return rows
 

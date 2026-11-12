@@ -71,16 +71,20 @@ def test_timeline_table_tells_the_story_in_a_column():
     assert any("ran whoami.exe, which shows the logged-on user" in s for s in stories)
     assert any("dropped C:\\Windows\\System32\\Updater.exe, which runs later" in s for s in stories)
     assert any("opened C:\\Ransom.txt in Notepad" in s for s in stories)
-    assert len(rows) < len(events)  # by default only the story's events
+    assert len(rows) < len(events)  # only the incident's events
 
 
-def test_timeline_table_all_events_and_local_time():
-    events = benign_events()
-    rows = story.story_rows(events, [], "Asia/Singapore", include_all=True)
-    assert len(rows) == len(events)
-    assert rows[0]["MITRE ATT&CK"] == ""  # not part of an attack
-    assert rows[0]["Local time"] == "2026-01-05 17:00:00" and "Time (UTC)" not in rows[0]
-    assert rows[0]["Sysmon Event ID"] == "1 – Process Create"
+def test_timeline_is_empty_without_an_incident():
+    assert story.story_rows(benign_events(), []) == []
+
+
+def test_timeline_in_local_time():
+    events = attack_events()
+    findings, steps = analysed(events)
+    rows = story.story_rows(events, steps, "Asia/Singapore")
+    # The first incident event is Edge saving the installer at 09:59:50 UTC = 17:59:50 in Singapore.
+    assert rows[0]["Local time"] == "2026-01-05 17:59:50" and "Time (UTC)" not in rows[0]
+    assert rows[0]["Sysmon Event ID"] == "15 – FileCreateStreamHash"
 
 
 def test_days_follow_the_chosen_zone():

@@ -141,7 +141,7 @@ def show_raw_events(event_ids, limit=5):
         st.caption(f"Event #{event_id}")
         st.json(events_by_id[event_id], expanded=False)
     if len(event_ids) > limit:
-        st.caption(f"... and {len(event_ids) - limit} more: see All events on the Timeline tab.")
+        st.caption(f"... and {len(event_ids) - limit} more: see the Timeline tab.")
 
 
 # ---------- sidebar ----------
@@ -405,23 +405,25 @@ with tabs[3]:
 # ---------- Timeline ----------
 
 with tabs[4]:
-    show_all = st.toggle("Show all events, not only the story", value=not steps)
-    rows = story.story_rows(events, steps, zone, include_all=show_all)
-    st.caption(f"{len(rows):,} events. {time_note}. The Sysmon Event ID can be searched as-is in any SIEM.")
-    if rows:
+    # Only the events that lead to the incident (the events behind the attack story).
+    rows = story.story_rows(events, steps, zone)
+    if not rows:
+        st.info("No incident events to show.")
+    else:
+        st.caption(f"{len(rows):,} incident events. {time_note}. "
+                   "The Sysmon Event ID can be searched as-is in any SIEM.")
         html_table(rows, short_columns=(list(rows[0])[0], "Sysmon Event ID", "Event #"))
 
-    shown_ids = {r["Event #"] for r in rows}
-    buffer = io.StringIO()
-    if rows:
+        buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    left, right, _ = st.columns([1, 2, 1])
-    left.download_button("Download CSV", buffer.getvalue(), "timeline.csv", "text/csv")
-    right.download_button("Download JSON (every Sysmon field)",
-                          json.dumps([e for e in events if e["record_id"] in shown_ids], indent=1),
-                          "events.json", "application/json")
+        shown_ids = {r["Event #"] for r in rows}
+        left, right, _ = st.columns([1, 2, 1])
+        left.download_button("Download CSV", buffer.getvalue(), "timeline.csv", "text/csv")
+        right.download_button("Download JSON (every Sysmon field)",
+                              json.dumps([e for e in events if e["record_id"] in shown_ids], indent=1),
+                              "events.json", "application/json")
 
 
 # ---------- Domains ----------
