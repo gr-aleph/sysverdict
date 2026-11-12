@@ -522,11 +522,14 @@ TOOL_DOWNLOAD_RULES = [
 ]
 
 
-def check_by_rules(events, check, title, strength, rules):
+def check_by_rules(events, check, title, strength, rules, skip_programs=()):
     """Shared by the command-line checks: one finding per program and rule, with the rule's
-    own ATT&CK tag (so a PsExec line and a WMI line get different techniques)."""
+    own ATT&CK tag (so a PsExec line and a WMI line get different techniques).
+    Programs in skip_programs are never checked (e.g. a browser reading its own password store)."""
     found = {}
     for e in events_of(events, 1):
+        if file_name(e.get("Image")) in skip_programs:
+            continue
         command = e.get("CommandLine", "")
         for pattern, what, tactic, technique in rules:
             if pattern.search(command):
@@ -557,6 +560,116 @@ def check_scheduled_task(events, context):
 def check_tool_download(events, context):
     """Weak: a Windows program that is not a download tool was used to download or decode a file."""
     return check_by_rules(events, "tool_download", "Download with a Windows tool", "Weak", TOOL_DOWNLOAD_RULES)
+
+
+# Stealing saved passwords. No common legitimate use outside the browser itself: Strong.
+CREDENTIAL_THEFT_RULES = [
+    # Browser password and cookie stores: Chrome/Edge "...\User Data\Default\Login Data" (also
+    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite"
+    rule(r"\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b",
+         "reads a browser's saved passwords or cookies", "Credential Access",
+         "T1555.003 Credentials from Web Browsers"),
+    # Dumping LSASS memory with Windows' own comsvcs.dll: "rundll32 comsvcs.dll, MiniDump 624 d.dmp full"
+    rule(r"comsvcs(\.dll)?.*\b(minidump|#24)\b", "dumps LSASS memory with comsvcs.dll",
+         "Credential Access", "T1003.001 LSASS Memory"),
+    # "procdump -ma lsass.exe out.dmp"
+    rule(r"\bprocdump(64)?(\.exe)?\b.*\s-ma\b.*\blsass", "dumps LSASS memory with ProcDump",
+         "Credential Access", "T1003.001 LSASS Memory"),
+    # Saving the password databases from the registry: "reg save HKLM\SAM sam.hiv"
+    rule(r"\breg(\.exe)?\"?\s+(save|export)\s+\"?hklm\\(sam|security)\b",
+         "copies the Windows password database (SAM/SECURITY)", "Credential Access",
+         "T1003.002 Security Account Manager"),
+    # Copying the domain password database: "ntdsutil "ac i ntds" "ifm" "create full C:\x""
+    rule(r"\bntdsutil(\.exe)?\b.*\b(ifm|create full)\b", "copies the domain password database (NTDS)",
+         "Credential Access", "T1003.003 NTDS"),
+]
+
+# Switching off the evidence: event logs, the Sysmon sensor, shadow copies and recovery.
+# Not routine on a workstation: Strong.
+EVIDENCE_REMOVAL_RULES = [
+    # "wevtutil cl System", "wevtutil clear-log Security"
+    rule(r"\bwevtutil(\.exe)?\"?\s+(cl|clear-log)\b", "clears an event log",
+         "Defense Evasion", "T1070.001 Clear Windows Event Logs"),
+    rule(r"\b(clear-eventlog|remove-eventlog)\b", "clears an event log",
+         "Defense Evasion", "T1070.001 Clear Windows Event Logs"),
+    # "fltmc unload SysmonDrv" (removes a security driver), "sysmon64 -u", "sc stop Sysmon64"
+    rule(r"\bfltmc(\.exe)?\"?\s+unload\b", "unloads a security driver (e.g. Sysmon)",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"\bsysmon(64)?(\.exe)?\"?\s+-u\b", "uninstalls Sysmon", "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"\b(sc|net)(\.exe)?\"?\s+(stop|delete)\s+\"?sysmon", "stops Sysmon",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    # Deleting the backups ransomware does not want you to restore from
+    rule(r"\bvssadmin(\.exe)?\b.*\bdelete\s+shadows\b", "deletes shadow copies (backups)",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bwmic(\.exe)?\b.*\bshadowcopy\b.*\bdelete\b", "deletes shadow copies (backups)",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bwbadmin(\.exe)?\b.*\bdelete\s+(catalog|systemstatebackup)\b", "deletes Windows backups",
+         "Impact", "T1490 Inhibit System Recovery"),
+    rule(r"\bbcdedit(\.exe)?\b.*\brecoveryenabled\s+no\b", "turns off Windows recovery",
+         "Impact", "T1490 Inhibit System Recovery"),
+]
+
+# Weakening Microsoft Defender. Admins sometimes add exclusions on purpose: Weak.
+DEFENDER_RULES = [
+    # "Set-MpPreference -DisableRealtimeMonitoring $true", "Add-MpPreference -ExclusionPath C:\x"
+    rule(r"set-mppreference\b.*\s-disable", "turns off part of Microsoft Defender",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    rule(r"add-mppreference\b.*\s-exclusion", "adds a Microsoft Defender exclusion",
+         "Defense Evasion", "T1562.001 Disable or Modify Tools"),
+]
+# The same in the registry, e.g. "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths\C:\x"
+# or "...\Policies\Microsoft\Windows Defender\DisableAntiSpyware" (.* = anything in between).
+DEFENDER_REGISTRY = re.compile(r"\\windows defender\\(exclusions\\|.*disable)", re.IGNORECASE)
+
+# The registry keys of known UAC bypasses: a program that Windows starts with admin rights
+# without asking (fodhelper.exe, eventvwr.exe) reads its "open" command from the user's own
+# registry, so writing that key gives admin rights silently. No legitimate use: Strong.
+UAC_BYPASS_KEY = re.compile(r"\\software\\classes\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
+
+
+def check_credential_theft(events, context):
+    """Strong: stealing saved passwords (browser stores, LSASS dumps, SAM/NTDS copies).
+    A browser reading its own files is skipped."""
+    return check_by_rules(events, "credential_theft", "Saved passwords stolen", "Strong",
+                          CREDENTIAL_THEFT_RULES, skip_programs=BROWSERS)
+
+
+def check_evidence_removal(events, context):
+    """Strong: event logs cleared, Sysmon switched off, backups or recovery deleted."""
+    return check_by_rules(events, "evidence_removal", "Logs, sensor or backups switched off", "Strong",
+                          EVIDENCE_REMOVAL_RULES)
+
+
+def check_defender_weakened(events, context):
+    """Weak: Microsoft Defender turned off in part, or an exclusion added (command line or registry)."""
+    found = {}
+    for f in check_by_rules(events, "defender_weakened", "Microsoft Defender weakened", "Weak", DEFENDER_RULES):
+        found[(f["process"].lower(), f["detail"])] = f
+    for e in events_of(events, 12) + events_of(events, 13):
+        target = e.get("TargetObject", "")
+        if not DEFENDER_REGISTRY.search(target):
+            continue
+        if file_name(e.get("Image")) == "msmpeng.exe":
+            continue  # Defender updating its own settings
+        if "disable" in target.lower() and e.get("Details", "").endswith("0x00000000)"):
+            continue  # a "Disable..." value set to 0 turns protection ON
+        add_finding(found, ("registry", target.lower()), e, "defender_weakened", "Microsoft Defender weakened",
+                    "Weak", e.get("Image", ""), f"{file_name(e.get('Image'))} changed {target[:180]}",
+                    e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+def check_uac_bypass(events, context):
+    """Strong: a known UAC-bypass registry key was written (silent admin rights)."""
+    found = {}
+    for e in events_of(events, 12) + events_of(events, 13):
+        target = e.get("TargetObject", "")
+        if UAC_BYPASS_KEY.search(target):
+            add_finding(found, target.lower(), e, "uac_bypass", "Admin rights taken without asking (UAC bypass)",
+                        "Strong", e.get("Image", ""),
+                        f"{file_name(e.get('Image'))} wrote {target[:150]} = {e.get('Details', '')[:120]}",
+                        e.get("ProcessGuid", ""))
+    return list(found.values())
 
 
 # A DLL path in a command line, e.g. "C:\Users\a\AppData\Roaming\x\update.dll":
@@ -594,6 +707,10 @@ ALL_CHECKS = [
     check_scheduled_task,
     check_tool_download,
     check_dll_from_user_folder,
+    check_credential_theft,
+    check_evidence_removal,
+    check_defender_weakened,
+    check_uac_bypass,
 ]
 
 

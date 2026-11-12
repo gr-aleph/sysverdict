@@ -88,6 +88,10 @@ ATTACK_TAGS = {
     "access_change": ("Persistence", "T1098 Account Manipulation"),
     "scheduled_task": ("Persistence", "T1053.005 Scheduled Task"),
     "tool_download": ("Command and Control", "T1105 Ingress Tool Transfer"),
+    "credential_theft": ("Credential Access", "T1555 Credentials from Password Stores"),
+    "evidence_removal": ("Defense Evasion", "T1070 Indicator Removal"),
+    "defender_weakened": ("Defense Evasion", "T1562.001 Disable or Modify Tools"),
+    "uac_bypass": ("Privilege Escalation", "T1548.002 Bypass User Account Control"),
 }
 
 # A recon burst is tagged by the discovery tool that ran first (other tools: T1033 above).
@@ -128,6 +132,11 @@ SENTENCES = {
     "scheduled_task": "{detail}. A task runs again later, so it can also keep malware running.",
     "tool_download": "{detail}. This Windows program is not a download tool, a known way to bring in malware.",
     "dll_from_user_folder": "{detail}: a DLL started from a folder any user can write to.",
+    "credential_theft": "{detail}. This steals saved passwords: treat every account used on this computer "
+                        "as known to the attacker.",
+    "evidence_removal": "{detail}. Attackers do this to hide what they did or to stop recovery.",
+    "defender_weakened": "{detail}. This lets malware run without Microsoft Defender seeing it.",
+    "uac_bypass": "{detail}. This gives a program admin rights without the Windows prompt.",
 }
 
 PHASES = ["Investigate", "Contain", "Eradicate", "Recover"]  # NIST SP 800-61 incident response
@@ -511,6 +520,17 @@ ACTIONS = {
                                       "SHA256 and check its reputation.")],
     "dll_from_user_folder": [("Investigate", "Collect the DLL listed under Findings and check its SHA256 "
                                              "and signature.")],
+    "credential_theft": [("Contain", "Reset the passwords of every account used on this computer, and "
+                                     "sign them out of websites (stolen cookies stay valid until then)."),
+                         ("Investigate", "Check where those accounts signed in after the theft.")],
+    "evidence_removal": [("Contain", "Isolate the computer: someone is hiding their tracks."),
+                         ("Investigate", "Collect logs from your SIEM or other computers for the time the "
+                                         "local logs were cleared or Sysmon was off."),
+                         ("Recover", "Restore from offline backups if shadow copies or backups were deleted.")],
+    "defender_weakened": [("Investigate", "Check whether IT made the Defender change on purpose; otherwise "
+                                          "undo it and scan the excluded folder.")],
+    "uac_bypass": [("Eradicate", "Delete the UAC-bypass registry key and the program it starts."),
+                   ("Investigate", "Check what ran with admin rights after the bypass.")],
 }
 
 

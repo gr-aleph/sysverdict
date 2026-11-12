@@ -329,6 +329,61 @@ def test_dll_from_a_user_folder_is_weak():
                                                   "Control_RunDLL desk.cpl") == []
 
 
+def test_credential_theft_is_strong():
+    chrome_store = "C:\\Users\\analyst\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Login Data"
+    fires = [(SYS + "esentutl.exe", f'esentutl.exe /y "{chrome_store}" /d C:\\Users\\Public\\ld.tmp'),
+             (SYS + "rundll32.exe", "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 624 C:\\d.dmp full"),
+             ("C:\\Tools\\procdump64.exe", "procdump64.exe -accepteula -ma lsass.exe out.dmp"),
+             (SYS + "reg.exe", "reg save HKLM\\SAM C:\\Users\\Public\\sam.hiv"),
+             (SYS + "ntdsutil.exe", 'ntdsutil "ac i ntds" "ifm" "create full C:\\x" q q')]
+    for image, command in fires:
+        assert ("credential_theft", "Strong") in command_findings(image, command), command
+    # Chrome opening its own profile, and reading a normal registry key, are not theft.
+    chrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    assert command_findings(chrome, f'chrome.exe --user-data-dir="{chrome_store}"') == []
+    assert command_findings(SYS + "reg.exe", "reg query HKLM\\SOFTWARE\\Microsoft") == []
+
+
+def test_evidence_removal_is_strong():
+    fires = [(SYS + "wevtutil.exe", "wevtutil cl System"),
+             (SYS + "fltMC.exe", "fltMC unload SysmonDrv"),
+             (SYS + "sc.exe", "sc stop Sysmon64"),
+             (SYS + "vssadmin.exe", "vssadmin delete shadows /all /quiet"),
+             (SYS + "wbem\\WMIC.exe", "wmic shadowcopy delete"),
+             (SYS + "bcdedit.exe", "bcdedit /set {default} recoveryenabled No")]
+    for image, command in fires:
+        assert ("evidence_removal", "Strong") in command_findings(image, command), command
+    # Reading a log, and creating a shadow copy (a backup), are normal.
+    assert command_findings(SYS + "wevtutil.exe", "wevtutil qe System /c:5") == []
+    assert command_findings(SYS + "vssadmin.exe", "vssadmin create shadow /for=E:") == []
+
+
+def test_defender_weakened_is_weak():
+    ps = SYS + "WindowsPowerShell\\v1.0\\powershell.exe"
+    assert ("defender_weakened", "Weak") in command_findings(ps, "powershell Set-MpPreference -DisableRealtimeMonitoring $true")
+    assert ("defender_weakened", "Weak") in command_findings(ps, "powershell Add-MpPreference -ExclusionPath C:\\x")
+    key = "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths\\C:\\Users\\analyst\\AppData\\x"
+    loader = "C:\\Users\\analyst\\AppData\\Roaming\\x\\loader.exe"
+    events = [event(1, 13, "2026-01-05 09:00:00.000", Image=loader, TargetObject=key, Details="DWORD (0x00000000)")]
+    assert [(f["check"], f["strength"]) for f in run_checks(events)] == [("defender_weakened", "Weak")]
+    # Defender's own update, and switching protection back ON (Disable... = 0), are not weakening.
+    defender = "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18\\MsMpEng.exe"
+    on = "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\\DisableRealtimeMonitoring"
+    quiet = [event(2, 13, "2026-01-05 09:00:00.000", Image=defender, TargetObject=key, Details="DWORD (0x00000000)"),
+             event(3, 13, "2026-01-05 09:00:00.000", Image=SYS + "svchost.exe", TargetObject=on,
+                   Details="DWORD (0x00000000)")]
+    assert run_checks(quiet) == []
+
+
+def test_uac_bypass_is_strong():
+    key = "HKU\\S-1-5-21-0_Classes\\Software\\Classes\\ms-settings\\shell\\open\\command\\(Default)"
+    events = [event(1, 13, "2026-01-05 09:00:00.000", Image=SYS + "WindowsPowerShell\\v1.0\\powershell.exe",
+                    TargetObject=key, Details="powershell -w hidden -c calc")]
+    assert [(f["check"], f["strength"]) for f in run_checks(events)] == [("uac_bypass", "Strong")]
+    normal = "HKU\\S-1-5-21-0_Classes\\Software\\Classes\\.pdf\\OpenWithProgids\\AcroExch.Document"
+    assert run_checks([event(2, 13, "2026-01-05 09:00:00.000", Image="C:\\x.exe", TargetObject=normal)]) == []
+
+
 def test_command_line_findings_carry_the_rule_tag():
     events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{w}", Image=SYS + "wbem\\WMIC.exe",
                     CommandLine='wmic /node:SRV-01 process call create "cmd"')]
