@@ -39,3 +39,6 @@ app; a backend that is missing shows as not running and its IOCs as not enriched
 
 Tests run offline with synthetic events and recorded backend responses; no network or API keys needed.
 Real logs placed in the git-ignored `samples/` folder are also checked when present.
+
+To score a folder of labelled logs (file names starting with `benign_`, `suspicious_` or `malicious_`)
+with a confusion matrix: `.venv\Scripts\python evaluate.py <folder>`.

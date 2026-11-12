@@ -1,4 +1,8 @@
 # Brand names attackers like to imitate in domain names (lowercase, 5+ letters are checked).
+# Source: the brands most often impersonated in phishing (APWG and vendor phishing reports),
+# plus security vendors, whose names fake "security update" installers use as a lure.
+# Keep entries general, never copied from one log.
+# big platforms and mail
 google
 gmail
 youtube
@@ -24,8 +28,10 @@ adobe
 docusign
 whatsapp
 telegram
+# crypto exchanges
 binance
 coinbase
+# security vendors
 fireeye
 trellix
 crowdstrike
@@ -36,6 +42,7 @@ kaspersky
 sophos
 malwarebytes
 sentinelone
+# regional brands for the clients this SOC serves (an environment choice; change per region)
 lazada
 shopee
 singpass
