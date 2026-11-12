@@ -67,15 +67,26 @@ st.markdown("""
   [data-testid="stPopover"] button p {font-size: .78rem; white-space: nowrap !important;}
   .ptree {background: #1A2129; border: 1px solid #2A3440; border-radius: 6px; padding: .7rem .9rem;
           margin-bottom: 1rem;}
-  .ptree .line {display: flex; line-height: 1.75; font-size: .9rem;}
-  .ptree .prefix {font-family: "IBM Plex Mono", monospace; color: #5B6B7C; white-space: pre; flex-shrink: 0;}
+  /* Each tree line has 3 columns: tree lines + name | time | details and tactic. */
+  .ptree .line {display: grid; grid-template-columns: minmax(0, 1.1fr) 4.6rem minmax(0, 1fr);
+                column-gap: .9rem; line-height: 1.75; font-size: .9rem;}
+  .ptree .tree {display: flex; min-width: 0;}
+  /* The tree lines, one 1.4rem piece per level, drawn with borders so they fill the whole row
+     height even when the details wrap: bar = "│", tee = "├──", end = "└──", blank = "    ". */
+  .ptree .seg {width: 1.4rem; flex-shrink: 0; position: relative;}
+  .ptree .seg::before, .ptree .seg::after {content: ""; position: absolute; left: .45rem; border-color: #5B6B7C;}
+  .ptree .bar::before, .ptree .tee::before {top: 0; bottom: 0; border-left: 1px solid;}
+  .ptree .end::before {top: 0; height: .8rem; border-left: 1px solid;}
+  .ptree .tee::after, .ptree .end::after {top: .8rem; width: .8rem; border-top: 1px solid;}
   .ptree .text {overflow-wrap: anywhere;}
-  .ptree .label {font-weight: 600; margin-right: .5rem;}
+  .ptree .time {font-family: "IBM Plex Mono", monospace; font-size: .78rem; color: #8B96A3; white-space: nowrap;}
+  .ptree .info {overflow-wrap: anywhere; min-width: 0;}
+  .ptree .label {font-weight: 600;}
+  .ptree .computer .label {font-weight: 700; letter-spacing: .03em;}
   .ptree .malicious .label {color: #E5484D;} .ptree .attack .label {color: #5CC8FF;}
   .ptree .context .label {color: #8B96A3; font-weight: 400;}
   .ptree .action .label {font-weight: 400; font-family: "IBM Plex Mono", monospace; font-size: .8rem;}
   .ptree .detail {font-family: "IBM Plex Mono", monospace; font-size: .78rem; color: #8B96A3; margin-right: .5rem;}
-  .ptree .meta {font-size: .75rem; color: #8B96A3; margin-right: .5rem;}
   .htable {max-height: 640px; overflow-y: auto; border: 1px solid #2A3440; border-radius: 6px; margin-bottom: 1rem;}
   .htable table {width: 100%; border-collapse: collapse; font-size: .9rem;}
   .htable th {position: sticky; top: 0; background: #1A2129; text-align: left; padding: .5rem .7rem;
@@ -396,18 +407,21 @@ with tabs[3]:
     if not tree_rows:
         st.info("No attack steps, so there is no process tree to show.")
     else:
+        # Each 4-character piece of the prefix ("│   ", "├── ", "└── ", "    ") becomes one CSS shape.
+        SEGMENT_CLASS = {"│   ": "bar", "├── ": "tee", "└── ": "end", "    ": "blank"}
         lines = []
         for row in tree_rows:
+            pieces = [row["prefix"][i:i + 4] for i in range(0, len(row["prefix"]), 4)]
+            tree_lines = "".join(f'<span class="seg {SEGMENT_CLASS[piece]}"></span>' for piece in pieces)
             detail = f'<span class="detail">{h(row["detail"])}</span>' if row["detail"] else ""
-            meta = f'<span class="meta">{h(row["meta"])}</span>' if row["meta"] else ""
             tactic = f'<span class="chip chip-tactic">{h(row["step"])}</span>' if row["step"] else ""
-            # Each level deeper is indented 1.6rem more and starts with "└─"; the text wraps under itself.
-            indent = max(row["depth"] - 1, 0) * 1.6
-            marker = "└─ " if row["depth"] > 0 else ""
-            lines.append(f'<div class="line {row["kind"]}" style="margin-left: {indent}rem">'
-                         f'<span class="prefix">{marker}</span>'
-                         f'<span class="text"><span class="label">{h(row["label"])}</span>'
-                         f'{detail}{meta}{tactic}</span></div>')
+            # Column 1: the tree lines and the name, which wraps under itself.
+            # Column 2: the time. Column 3: the details, then the blue tactic chip.
+            lines.append(f'<div class="line {row["kind"]}">'
+                         f'<span class="tree">{tree_lines}'
+                         f'<span class="text"><span class="label">{h(row["label"])}</span></span></span>'
+                         f'<span class="time">{h(row["time"])}</span>'
+                         f'<span class="info">{detail}{tactic}</span></div>')
         st.markdown(f'<div class="ptree">{"".join(lines)}</div>', unsafe_allow_html=True)
 
 

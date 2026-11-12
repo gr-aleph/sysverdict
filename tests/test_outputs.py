@@ -1,6 +1,6 @@
 """Domains, process tree and timeline."""
 
-from tests.fixtures.events import attack_events, benign_events
+from tests.fixtures.events import attack_events, benign_events, event
 from triage import graph, story
 from triage.checks import run_checks
 from triage.domains import classify_domains
@@ -23,7 +23,7 @@ def test_domain_labels():
 
 # ---------- process tree ----------
 
-def test_indented_process_tree():
+def test_process_tree():
     events = attack_events()
     findings, steps = analysed(events)
     rows = graph.build_process_tree(events, findings, steps)
@@ -31,14 +31,42 @@ def test_indented_process_tree():
     for row in rows:
         by_label.setdefault(row["label"], row)
     assert by_label["FireEyeInstaller.exe"]["kind"] == "malicious"
-    assert "admin rights" in by_label["FireEyeInstaller.exe"]["meta"]
+    assert "admin rights" in by_label["FireEyeInstaller.exe"]["detail"]
     assert by_label["whoami.exe"]["kind"] == "attack" and by_label["whoami.exe"]["step"] == "Discovery"
-    assert any(r["kind"] == "action" and r["label"].startswith("connects to 167.172.71.11:80") for r in rows)
-    assert any(r["kind"] == "action" and r["label"].startswith("creates service 'Fake Updater'") for r in rows)
-    assert by_label["Updater.exe"]["meta"].endswith("file dropped by video.mp4.exe")
-    # the normal parent program is at the top; everything else is indented under it
-    assert rows[0]["depth"] == 0 and rows[0]["kind"] == "context"
-    assert all(r["depth"] > 0 for r in rows if r["kind"] != "context")
+    assert any(r["kind"] == "action" and r["label"] == "connects to 167.172.71.11:80" for r in rows)
+    # A short label on the left, the long value on the right.
+    service = next(r for r in rows if r["label"] == "creates service 'Fake Updater'")
+    assert service["kind"] == "action" and service["detail"]
+    assert by_label["Updater.exe"]["detail"].endswith("file dropped by video.mp4.exe")
+    # The computer is the top line; every other line hangs under it.
+    assert rows[0] == {"depth": 0, "kind": "computer", "prefix": "", "label": "LAB-PC01",
+                       "time": "", "detail": "", "step": ""}
+    assert all(r["depth"] > 0 and r["prefix"] for r in rows[1:])
+
+
+def test_process_tree_lines():
+    events = attack_events()
+    findings, steps = analysed(events)
+    rows = graph.build_process_tree(events, findings, steps)
+    for number, row in enumerate(rows[1:], start=1):
+        prefix = row["prefix"]
+        # Every line ends with a branch: "├── " (more items follow) or "└── " (the last one).
+        assert prefix.endswith(("├── ", "└── "))
+        # Four characters per level, so the depth can be read from the prefix.
+        assert len(prefix) == 4 * row["depth"]
+        # After a "├── ", a later line of the same parent comes before the parent's list ends;
+        # so the next line at this depth or deeper keeps a "│" at this column.
+        if prefix.endswith("├── "):
+            column = len(prefix) - 4
+            following = [r for r in rows[number + 1:] if r["depth"] >= row["depth"]]
+            assert following and following[0]["prefix"][column] in "│├└"
+
+
+def test_computer_line_shows_the_name_and_its_own_ip():
+    events = [event(1, 3, "2026-01-05 09:00:00.000", Initiated="false", SourceIp="8.8.8.8"),
+              event(2, 3, "2026-01-05 09:00:01.000", Initiated="True", SourceIp="10.0.0.5")]  # as Sysmon writes it
+    assert graph.computer_line(events) == "LAB-PC01  10.0.0.5"
+    assert graph.computer_line(events[:1]) == "LAB-PC01"  # no outgoing connection: name only
 
 
 def test_process_tree_uses_the_chosen_time_zone():
@@ -46,11 +74,11 @@ def test_process_tree_uses_the_chosen_time_zone():
     findings, steps = analysed(events)
     utc = graph.build_process_tree(events, findings, steps)
     singapore = graph.build_process_tree(events, findings, steps, "Asia/Singapore")  # UTC+8
-    timed = [(a["meta"], b["meta"]) for a, b in zip(utc, singapore) if a["meta"]]
+    timed = [(a["time"], b["time"]) for a, b in zip(utc, singapore) if a["time"]]
     assert timed
-    for utc_meta, local_meta in timed:
-        assert (int(utc_meta[:2]) + 8) % 24 == int(local_meta[:2])
-        assert utc_meta[2:8] == local_meta[2:8]  # same minutes and seconds
+    for utc_time, local_time in timed:
+        assert (int(utc_time[:2]) + 8) % 24 == int(local_time[:2])
+        assert utc_time[2:] == local_time[2:]  # same minutes and seconds
 
 
 def test_no_process_tree_for_a_benign_log():
