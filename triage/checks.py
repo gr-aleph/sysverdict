@@ -21,7 +21,7 @@ import ipaddress
 import re
 from pathlib import Path
 
-from triage.parse import to_datetime
+from triage.parse import hide_secrets, to_datetime
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -50,9 +50,13 @@ SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe",
 RECON_TOOLS = {"whoami.exe", "ipconfig.exe", "systeminfo.exe", "net.exe", "net1.exe",
                "nltest.exe", "quser.exe", "hostname.exe", "tasklist.exe", "arp.exe",
                "netstat.exe", "route.exe", "nslookup.exe"}
-# Programs that mean "a person at the keyboard": the desktop, and a remote admin session over
-# WinRM (wsmprovhost.exe hosts PowerShell remoting). Recon typed by a person is normal help-desk work.
-PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe"}
+# Programs that mean "a person at the keyboard": the desktop, a remote admin session over
+# WinRM (wsmprovhost.exe hosts PowerShell remoting), and the windows people type commands in
+# (Windows Terminal, the PowerShell ISE, VS Code's terminal). Recon typed by a person is normal
+# help-desk work.
+PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe", "windowsterminal.exe", "powershell_ise.exe", "code.exe"}
+# Shells that only pass a command on: the recon check looks past them to find who started it.
+PASS_ON_SHELLS = ("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe")
 BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "iexplore.exe", "brave.exe",
             "opera.exe", "msedgewebview2.exe"}
 # Real Windows programs that should only ever run from the Windows folder.
@@ -65,13 +69,20 @@ SYSTEM_FOLDERS = ("c:\\windows\\system32\\", "c:\\windows\\syswow64\\", "c:\\win
 # (a copy of MsMpEng.exe in a user folder is not Microsoft Defender).
 LSASS_OK = {"svchost.exe", "msmpeng.exe", "wininit.exe", "csrss.exe", "wmiprvse.exe",
             "lsass.exe", "services.exe", "mrt.exe"}
-LSASS_OK_FOLDERS = ("c:\\windows\\", "c:\\programdata\\microsoft\\windows defender\\",
+# Only the system folders, not all of C:\Windows (C:\Windows\Temp is writable by everyone).
+LSASS_OK_FOLDERS = ("c:\\windows\\system32\\", "c:\\windows\\syswow64\\",
+                    "c:\\programdata\\microsoft\\windows defender\\",
                     "c:\\program files\\windows defender\\")
 # The access right that lets a program read another program's memory (where passwords are).
 PROCESS_VM_READ = 0x0010
 
 # Two-part domain endings: in "shop.example.co.uk" the name is "example", not "co".
 TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
+
+# Domains a brand owns itself, whose name part happens to be one letter from another brand
+# (Microsoft 365 moved to *.cloud.microsoft; "cloud" is one letter from "icloud"). A lookup of
+# one of these, or of a subdomain, is never a lookalike. Source: Microsoft's own domain list.
+BRAND_OWNED_DOMAINS = ("cloud.microsoft",)
 
 # File endings a ransom note uses (a text or web page the victim is meant to open).
 NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
@@ -86,14 +97,20 @@ NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
 # "powershell -EncodedCommand aQB3AHIA...". Group 1 is the base64 text.
 ENCODED_COMMAND = re.compile(r"\s-e[a-z]*\s+([a-z0-9+/=]{20,})", re.IGNORECASE)
 # Downloading text or a file from the internet: the WebClient methods, Invoke-WebRequest
-# (alias iwr), Invoke-RestMethod (alias irm), BITS.
+# (aliases iwr, and curl/wget in Windows PowerShell 5), Invoke-RestMethod (alias irm), BITS.
 PS_DOWNLOAD = re.compile(r"downloadstring|downloadfile|downloaddata|net\.webclient|invoke-webrequest|"
-                         r"\biwr\b|invoke-restmethod|\birm\b|start-bitstransfer")
+                         r"\biwr\b|\bcurl\b|\bwget\b|invoke-restmethod|\birm\b|start-bitstransfer")
+# The official one-line installers of the Chocolatey and Scoop package managers download a
+# script and run it (documented on chocolatey.org and scoop.sh). Admins paste these every day:
+# Low, not High. Only these exact sources; any other download-and-run stays as judged.
+OFFICIAL_INSTALLERS = re.compile(r"community\.chocolatey\.org/install\.ps1|get\.scoop\.sh")
 # Running text as code: Invoke-Expression (alias iex).
 PS_RUN_TEXT = re.compile(r"\biex\b|invoke-expression")
 # Turning base64 text back into code inside the script.
 PS_DECODE = re.compile(r"frombase64string")
-# A hidden window alone is not a sign: management agents and scheduled scripts use it too.
+# A hidden window, -ExecutionPolicy Bypass or an encoded command alone is not a finding:
+# management agents (Intune, RMM, monitoring) use them all day (measured: up to 30 times in one
+# normal log), so they would bury the real signals.
 
 # A file name with a fake document ending before a program ending, e.g. "invoice.pdf.exe".
 # Part 1 is the fake ending (docx? = doc or docx, jpe?g = jpg or jpeg); part 2 is the real
@@ -103,8 +120,17 @@ DOUBLE_EXTENSION = re.compile(
     r"\.(exe|scr|com|bat|cmd|vbs|js|pif)$")
 
 # Words typical of ransom-note file names, e.g. "RANSOM.txt", "how_to_recover.html",
-# "restore-files.txt". [_ -]? allows an optional underscore, space or dash between words.
-RANSOM_NOTE = re.compile(r"ransom|decrypt|how[_ -]?to[_ -]?(recover|restore)|restore[_ -]?files")
+# "restore-files.txt", "RESTORE_MY_FILES.txt". [_ -]? allows an optional underscore, space or
+# dash between words. ("readme" is not on the list: every installer writes a readme.txt.)
+RANSOM_NOTE = re.compile(r"ransom|decrypt|how[_ -]?to[_ -]?(recover|restore)|restore[_ -]?(my[_ -]?)?files")
+
+# A Windows path such as C:\Users\x\report.pdf inside a command line (it ends at a quote,
+# a space or the end of the text, so "video.mp4.exe" is read whole).
+# Pieces: [a-z]:\\ = drive letter and backslash; [^\"]+? = the shortest run of characters
+# that are not quotes; \.[a-z0-9]{2,4} = a file ending of 2-4 characters; (?=[\"\s]|$) =
+# "followed by a quote, a space or the end", without including that character.
+# (Also used by iocs.py and story.py.)
+FILE_IN_TEXT = re.compile(r"[a-z]:\\[^\"]+?\.[a-z0-9]{2,4}(?=[\"\s]|$)", re.IGNORECASE)
 
 
 # ---------- small helpers ----------
@@ -123,6 +149,20 @@ def in_user_folder(path):
     """True for programs in Downloads, Temp, AppData, ... unless on the known-good list."""
     path = (path or "").lower()
     return any(marker in path for marker in USER_FOLDER_MARKERS) and not is_known_good(path)
+
+
+def full_windows_path(path):
+    """Service paths are often written in short forms; turn them into C:\\Windows\\... (lowercase):
+    '%SystemRoot%\\System32\\svchost.exe', '\\SystemRoot\\System32\\drivers\\x.sys',
+    'System32\\drivers\\x.sys' and '\\??\\C:\\...' all point into the Windows folder or a full path."""
+    path = path.lower().replace("%systemroot%", "c:\\windows").replace("%windir%", "c:\\windows")
+    if path.startswith("\\??\\"):
+        path = path[4:]
+    if path.startswith("\\systemroot\\"):
+        path = "c:\\windows\\" + path[len("\\systemroot\\"):]
+    if path.startswith("system32\\"):
+        path = "c:\\windows\\" + path
+    return path
 
 
 def is_public_ip(text):
@@ -206,6 +246,12 @@ def check_document_app_spawns_program(events, context):
         if file_name(e.get("ParentImage")) not in DOCUMENT_APPS:
             continue
         child = e.get("Image", "")
+        # A browser (a person clicked a link in the document or e-mail; a per-user Chrome lives in
+        # AppData) and Windows' "Open with" dialog (rundll32 shell32.dll,OpenAs_RunDLL) are normal.
+        if file_name(child) in BROWSERS:
+            continue
+        if file_name(child) == "rundll32.exe" and "openas_rundll" in e.get("CommandLine", "").lower():
+            continue
         if file_name(child) in SHELLS or in_user_folder(child):
             add_finding(found, child.lower(), e, "document_app_spawns_program",
                         "Document app started a program", "Strong", child,
@@ -223,9 +269,11 @@ def decode_powershell(command):
     text = match.group(1)
     text += "=" * (-len(text) % 4)  # base64 length must be a multiple of 4
     try:
-        return base64.b64decode(text).decode("utf-16-le", errors="replace")
+        decoded = base64.b64decode(text).decode("utf-16-le", errors="replace")
     except ValueError:  # not real base64
         return ""
+    # The hidden command can contain a password too: hide it before it is checked or shown.
+    return hide_secrets(decoded)
 
 
 def check_suspicious_powershell(events, context):
@@ -242,7 +290,9 @@ def check_suspicious_powershell(events, context):
         downloads = bool(PS_DOWNLOAD.search(everything))
         runs_text = bool(PS_RUN_TEXT.search(everything))
         decodes = bool(PS_DECODE.search(everything))
-        if runs_text and (downloads or decodes):
+        if runs_text and (downloads or decodes) and OFFICIAL_INSTALLERS.search(everything):
+            strength, title = "Weak", "PowerShell ran a package manager's official installer"
+        elif runs_text and (downloads or decodes):
             strength, title = "Strong", "PowerShell downloaded and ran code"
         elif downloads or runs_text or decodes:
             strength, title = "Weak", "PowerShell download or hidden code"
@@ -275,23 +325,34 @@ def check_lsass_access(events, context):
 
 
 def find_launcher(event, processes):
-    """Who really started this command? Skip over a 'cmd /c' or PowerShell in between."""
+    """Who really started this command? Walk up past every 'cmd /c' or PowerShell in between
+    (e.g. agent -> cmd -> powershell -> whoami gives the agent). If a shell's own start is not in
+    the log (it was opened before the log began), the shell itself is returned."""
     guid, image = event.get("ParentProcessGuid", ""), event.get("ParentImage", "")
-    if file_name(image) in ("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"):
+    for _ in range(10):  # 10 shells inside each other is already far more than real life
+        if file_name(image) not in PASS_ON_SHELLS:
+            break
         parent = processes.get(guid)
-        if parent:
-            guid, image = parent.get("ParentProcessGuid", ""), parent.get("ParentImage", "")
+        if not parent:
+            break  # the shell started before the log: we cannot see who opened it
+        guid, image = parent.get("ParentProcessGuid", ""), parent.get("ParentImage", "")
     return guid, image
 
 
 def check_recon_burst(events, context):
-    """Strong: one program runs 2+ different discovery tools (whoami, ipconfig, ...) within 60 s."""
+    """Strong: one program runs 2+ different discovery tools (whoami, ipconfig, ...) within 60 s.
+    ATT&CK Discovery (T1033, T1016, T1082). Why 60 s and 2 tools: a person pauses to read each
+    answer, a script runs its tools within seconds; 60 s is a generous window for that.
+    Dual-use: admin and monitoring (RMM) tools run the same commands, so apply_dual_use_gate
+    keeps it Strong only when the program has another high-confidence sign."""
     by_launcher = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in RECON_TOOLS:
             guid, image = find_launcher(e, context["processes"])
             if file_name(image) in PERSON_PROGRAMS:
                 continue  # a person typing (locally or in a remote admin session), not a program
+            if file_name(image) in PASS_ON_SHELLS:
+                continue  # a shell opened before the log began: most likely a person's window
             by_launcher.setdefault((guid, image), []).append(e)
 
     found = {}
@@ -334,6 +395,8 @@ def check_lookalike_domain(events, context):
     found = {}
     for e in events_of(events, 22):
         domain = e.get("QueryName", "").lower().rstrip(".")
+        if any(domain == owned or domain.endswith("." + owned) for owned in BRAND_OWNED_DOMAINS):
+            continue
         brand = lookalike_brand(main_label(domain))
         if brand is None:
             continue
@@ -358,6 +421,7 @@ def check_persistence(events, context):
         # The program the key will start, without quotes and arguments.
         value_path = value.strip('"').split('"')[0].lower()
         value_path = value_path.split(".exe")[0] + ".exe" if ".exe" in value_path else value_path
+        value_path = full_windows_path(value_path)
 
         # A Run or RunOnce registry key, e.g. ...\Microsoft\Windows\CurrentVersion\Run\FireEye.
         # (\\ is one backslash; (once)? means "Once" may follow "Run".)
@@ -374,6 +438,11 @@ def check_persistence(events, context):
             elif in_user_folder(writer) or in_user_folder(value_path):
                 add_finding(found, target.lower(), e, "persistence", "Starts itself at logon (Run key)",
                             "Weak", writer, detail, e.get("ProcessGuid", ""))
+            # Any other new Run key entry is worth a look too (ATT&CK T1547.001), except a known-good
+            # program, or an installed program adding ITSELF (Edge, Teams and tray apps do this).
+            elif not is_known_good(value_path) and file_name(writer) != file_name(value_path):
+                add_finding(found, target.lower(), e, "persistence", "New program set to start at logon",
+                            "Weak", writer, detail, e.get("ProcessGuid", ""))
         # The program path of a Windows service: ...\Services\<service name>\ImagePath.
         # ([^\\]+ is the service name: one or more characters that are not a backslash.)
         elif re.search(r"\\services\\[^\\]+\\imagepath$", target, re.IGNORECASE):
@@ -381,14 +450,26 @@ def check_persistence(events, context):
             # System32 or a user folder.
             dropped = value_path in context["dropped_files"]
             in_program_files = "\\program files" in value_path
+            # Defender platform updates (known-good list) and driver updates (Windows installs
+            # drivers from its DriverStore) create new service files all the time.
+            if is_known_good(value_path) or "\\windows\\system32\\driverstore\\" in value_path:
+                continue
+            service = target.split("\\")[-2]
+            # Point at the service program itself (not services.exe, which wrote the key).
+            guid = next((p["ProcessGuid"] for p in context["processes"].values()
+                         if p.get("Image", "").lower() == value_path), "")
             if (dropped and not in_program_files) or in_user_folder(value_path):
-                service = target.split("\\")[-2]
-                # Point at the service program itself (not services.exe, which wrote the key).
-                guid = next((p["ProcessGuid"] for p in context["processes"].values()
-                             if p.get("Image", "").lower() == value_path), "")
-                add_finding(found, target.lower(), e, "persistence", "New service from a dropped file",
+                add_finding(found, target.lower(), e, "persistence", SERVICE_TITLE,
                             "Strong", value_path, f"service '{service}' runs {value[:150]}, a file "
                             "created during this log", guid)
+            # Any other new or changed service is worth a look too (ATT&CK T1543.003), except one in
+            # the Windows folder (Windows updates rewrite those all the time). A service that runs a
+            # shell (cmd /c ..., %COMSPEC%, powershell) is the PsExec / attack-tool pattern
+            # (T1569.002), so it is reported even though cmd.exe lives in the Windows folder.
+            elif (not value_path.startswith("c:\\windows\\") or file_name(value_path) in SHELLS
+                  or "%comspec%" in value.lower()):
+                add_finding(found, target.lower(), e, "persistence", "New or changed service",
+                            "Weak", value_path or value, f"service '{service}' runs {value[:150]}", guid)
     return list(found.values())
 
 
@@ -401,7 +482,10 @@ def check_ransom_note(events, context):
         if e["event_id"] == 11:
             names = [file_name(text)]
         else:
+            # Words of the command line ("notepad RANSOM.txt") and full paths, which may contain
+            # spaces ("C:\Users\a\Desktop\HOW TO RECOVER.txt").
             names = [file_name(part.strip('"')) for part in text.split()]
+            names += [file_name(path) for path in FILE_IN_TEXT.findall(text)]
         is_note = False
         for name in names:
             if name.endswith(NOTE_ENDINGS) and RANSOM_NOTE.search(name):
@@ -439,6 +523,178 @@ def check_network_from_user_folder(events, context):
                         "User-folder program went online", "Weak", image,
                         f"{file_name(image)} connected to {ip}:{e.get('DestinationPort', '')}",
                         e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# Programs that run scripts or other code for someone else (ATT&CK T1059 Command and Scripting
+# Interpreter, T1218 System Binary Proxy Execution).
+SCRIPT_HOSTS = {"powershell.exe", "pwsh.exe", "rundll32.exe", "regsvr32.exe", "mshta.exe",
+                "wscript.exe", "cscript.exe"}
+
+
+def check_script_host_online(events, context):
+    """Weak: a script or proxy host (PowerShell, rundll32, mshta, wscript...) itself connected to a
+    public IP: how download cradles and beacons talk to the internet (T1105, T1071).
+    Dual-use: admin scripts also download updates, so Low. Connections TO the computer
+    (Initiated = false) and to private addresses are not reported."""
+    found = {}
+    for e in events_of(events, 3):
+        image, ip = e.get("Image", ""), e.get("DestinationIp", "")
+        outgoing = e.get("Initiated", "true").lower() == "true"
+        if file_name(image) in SCRIPT_HOSTS and is_public_ip(ip) and outgoing:
+            add_finding(found, (image.lower(), ip), e, "script_host_online", "Script host went online",
+                        "Weak", image, f"{file_name(image)} connected to {ip}:{e.get('DestinationPort', '')}",
+                        e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# Web and database server processes. They serve pages and queries; they do not start shells.
+# A web shell (a script an attacker uploaded to the website) makes them do exactly that
+# (ATT&CK T1505.003 Web Shell, T1190 Exploit Public-Facing Application; SQL Server's
+# xp_cmdshell: T1505.001). Names: IIS (w3wp), Apache (httpd), nginx, PHP, Tomcat, SQL Server,
+# Exchange's Unified Messaging worker.
+SERVER_PROCESSES = ("w3wp.exe", "httpd.exe", "nginx.exe", "php-cgi.exe", "tomcat", "sqlservr.exe",
+                    "umworkerprocess.exe")
+
+
+def check_web_shell(events, context):
+    """Strong: a web or database server started a shell, a script host or a recon tool.
+    Not dual-use: a normal web application does not open a command prompt."""
+    found = {}
+    for e in events_of(events, 1):
+        parent = file_name(e.get("ParentImage"))
+        child = e.get("Image", "")
+        if not parent.startswith(SERVER_PROCESSES):
+            continue
+        if file_name(child) in SHELLS | SCRIPT_HOSTS | RECON_TOOLS:
+            add_finding(found, (parent, file_name(child)), e, "web_shell", "Server started a shell (web shell)",
+                        "Strong", child, f"{parent} started {file_name(child)}: "
+                        f"{e.get('CommandLine', '')[:160]}", e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# Remote-access and remote-management (RMM) tools, by the start of their program names. Source:
+# the LOLRMM project (lolrmm.io) and CISA advisory AA23-025A on RMM tools misused by attackers
+# (ATT&CK T1219 Remote Access Software). Dual-use: help desks use them every day, so Low.
+REMOTE_ACCESS_TOOLS = ("anydesk", "teamviewer", "screenconnect", "connectwisecontrol", "rustdesk",
+                       "splashtop", "srservice", "ateraagent", "ninjarmmagent", "agentmon", "logmein",
+                       "rutserv", "rfusclient", "supremo", "meshagent", "action1", "simplehelp",
+                       "remotepc", "tightvnc", "tvnserver", "ultravnc", "winvnc")
+
+
+def check_remote_access_tool(events, context):
+    """Weak: a remote-access / RMM tool was installed or ran. One finding per tool."""
+    found = {}
+    for e in events_of(events, 1):
+        name = file_name(e.get("Image"))
+        tool = next((t for t in REMOTE_ACCESS_TOOLS if name.startswith(t)), None)
+        if tool:
+            add_finding(found, tool, e, "remote_access_tool", "Remote-access tool ran", "Weak",
+                        e.get("Image", ""), f"{name} ran (a remote-access tool: was a support session "
+                        "planned?)", e.get("ProcessGuid", ""))
+    return list(found.values())
+
+
+# ---------- data theft: packing, copying out, uploading ----------
+
+# Packing files into an archive (ATT&CK T1560.001 Archive via Utility; collecting files in one
+# place is also T1074.001 Local Data Staging). Dual-use: people zip files every day, so Low.
+#   7z/7za/7zr/7zg/rar/winrar with the "a" (add) command: "7z a out.7z C:\docs"
+#   tar with a "c" (create) option: "tar -czf out.tgz docs"; Compress-Archive; makecab
+#   (?<![\w.])tar = "tar" as a program, not the end of "a.tar"; (?-i:...) = this part is
+#   case-sensitive, because tar's -C (capital) means "change folder", not "create".
+ARCHIVE_COMMAND = re.compile(r"\b(7z[arg]?|rar|winrar)(\.exe)?\"?\s+a\s|"
+                             r"(?<![\w.])tar(\.exe)?\"?\s+-?(?-i:[a-z]*c[a-z]*)\s|"
+                             r"compress-archive\b|\bmakecab(\.exe)?\b", re.IGNORECASE)
+# The archive file named after "7z a" / "rar a" (options such as -p or -tzip may come first).
+ARCHIVE_NAME = re.compile(r"\b(?:7z[arg]?|rar|winrar)(?:\.exe)?\"?\s+a\s+(?:-\S+\s+)*\"?([^\"\s]+)",
+                          re.IGNORECASE)
+# Endings an archive file really has (.001 = the first part of a split archive).
+ARCHIVE_ENDINGS = (".7z", ".zip", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".cab", ".001")
+
+
+def check_archive(events, context):
+    """Weak: files were packed into an archive (dual-use).
+    Strong: the archive got a non-archive ending ("7z a holiday.jpg docs\\"), which disguises it as
+    another file type (T1036.008 Masquerade File Type): no common legitimate use."""
+    found = {}
+    for e in events_of(events, 1):
+        command = e.get("CommandLine", "")
+        if not ARCHIVE_COMMAND.search(command):
+            continue
+        name_match = ARCHIVE_NAME.search(command)
+        archive = file_name(name_match.group(1)) if name_match else ""
+        # 7-Zip and RAR add their own ending to a name without one, so only a different ending counts.
+        disguised = "." in archive and not archive.endswith(ARCHIVE_ENDINGS)
+        if disguised:
+            title, strength = "Archive disguised as another file type", "Strong"
+        else:
+            title, strength = "Files packed into an archive", "Weak"
+        add_finding(found, (file_name(e.get("Image")), title), e, "archive", title, strength,
+                    e.get("Image", ""), f"{file_name(e.get('Image'))}: {command[:180]}", e.get("ProcessGuid", ""))
+        if disguised:
+            found[(file_name(e.get("Image")), title)].update(
+                {"tactic": "Defense Evasion", "technique": "T1036.008 Masquerade File Type"})
+    return list(found.values())
+
+
+# A "bulk copy": a person saves a few files to a USB stick; copying a folder writes dozens within
+# minutes. 20 files in 10 minutes separates the two (a judgement from how people work, not from
+# any log). Exfiltration over USB is ATT&CK T1052.001. Sysmon cannot tell a USB stick from another
+# drive, so every drive except C: counts (a network drive is a copy-out too). Dual-use: Low.
+BULK_FILES, BULK_SECONDS = 20, 600
+OTHER_DRIVE = re.compile(r"^[a-bd-z]:\\", re.IGNORECASE)
+
+
+def check_copy_to_other_drive(events, context):
+    """Weak: 20+ files, or any archive, written to a drive other than C: within 10 minutes."""
+    by_drive = {}
+    for e in events_of(events, 11):
+        path = e.get("TargetFilename", "")
+        if OTHER_DRIVE.match(path) and ":zone.identifier" not in path.lower():
+            by_drive.setdefault(path[0].upper(), []).append(e)
+
+    found = {}
+    for drive, files in by_drive.items():
+        files.sort(key=lambda e: e["time"])
+        for first in files:
+            start = to_datetime(first["time"])
+            window = [f for f in files if 0 <= (to_datetime(f["time"]) - start).total_seconds() <= BULK_SECONDS]
+            archives = [f for f in window if f.get("TargetFilename", "").lower().endswith(ARCHIVE_ENDINGS)]
+            if len(window) >= BULK_FILES or archives:
+                proof = window if len(window) >= BULK_FILES else archives
+                for f in proof:
+                    add_finding(found, drive, f, "copy_to_other_drive", "Files copied to another drive (USB?)",
+                                "Weak", f.get("Image", ""), f"{len(window)} file(s) written to drive {drive}: "
+                                f"within 10 minutes (archives: {len(archives)})", f.get("ProcessGuid", ""))
+                break  # one finding per drive is enough
+    return list(found.values())
+
+
+# File-transfer services and tools that attackers use to upload stolen data (ATT&CK T1567.002
+# Exfiltration to Cloud Storage; incident reports most often name MEGA with rclone or MEGAsync,
+# and one-off transfer sites). Mainstream storage (Dropbox, Google Drive, OneDrive) is left out:
+# nearly every normal computer uses one. Dual-use: Low.
+TRANSFER_SITES = ("mega.nz", "mega.co.nz", "mega.io", "wetransfer.com", "we.tl", "file.io", "gofile.io",
+                  "transfer.sh", "sendspace.com", "pixeldrain.com", "catbox.moe", "anonfiles.com",
+                  "bashupload.com", "temp.sh", "filebin.net", "ufile.io")
+TRANSFER_TOOLS = ("rclone", "megasync", "megacmd", "megatools")
+
+
+def check_cloud_upload(events, context):
+    """Weak: a file-transfer site was looked up, or an upload tool such as rclone ran."""
+    found = {}
+    for e in events_of(events, 22):
+        domain = e.get("QueryName", "").lower().rstrip(".")
+        site = next((s for s in TRANSFER_SITES if domain == s or domain.endswith("." + s)), None)
+        if site:
+            add_finding(found, site, e, "cloud_upload", "File-transfer site used", "Weak", e.get("Image", ""),
+                        f"{file_name(e.get('Image'))} looked up {domain}", e.get("ProcessGuid", ""))
+    for e in events_of(events, 1):
+        name = file_name(e.get("Image"))
+        if name.startswith(TRANSFER_TOOLS):
+            add_finding(found, name, e, "cloud_upload", "Upload tool ran", "Weak", e.get("Image", ""),
+                        f"{name}: {e.get('CommandLine', '')[:180]}", e.get("ProcessGuid", ""))
     return list(found.values())
 
 
@@ -525,17 +781,25 @@ TOOL_DOWNLOAD_RULES = [
 def check_by_rules(events, check, title, strength, rules, skip_programs=()):
     """Shared by the command-line checks: one finding per program and rule, with the rule's
     own ATT&CK tag (so a PsExec line and a WMI line get different techniques).
-    Programs in skip_programs are never checked (e.g. a browser reading its own password store)."""
+    Programs in skip_programs are never checked (e.g. a browser reading its own password store).
+    For PowerShell, the hidden text of an encoded command is searched too, so encoding cannot
+    hide a command from these checks (ATT&CK T1027 Obfuscated Files or Information)."""
     found = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in skip_programs:
             continue
         command = e.get("CommandLine", "")
+        shown = command
+        if file_name(e.get("Image")) in ("powershell.exe", "pwsh.exe"):
+            decoded = decode_powershell(command)
+            if decoded:
+                command = command + " " + decoded
+                shown = "decoded command: " + decoded
         for pattern, what, tactic, technique in rules:
             if pattern.search(command):
                 key = (file_name(e.get("Image")), what)
                 add_finding(found, key, e, check, title, strength, e.get("Image", ""),
-                            f"{file_name(e.get('Image'))} {what}: {command[:180]}", e.get("ProcessGuid", ""))
+                            f"{file_name(e.get('Image'))} {what}: {shown[:180]}", e.get("ProcessGuid", ""))
                 found[key]["tactic"], found[key]["technique"] = tactic, technique
                 break  # one rule per command line is enough
     return list(found.values())
@@ -565,8 +829,11 @@ def check_tool_download(events, context):
 # Stealing saved passwords. No common legitimate use outside the browser itself: Strong.
 CREDENTIAL_THEFT_RULES = [
     # Browser password and cookie stores: Chrome/Edge "...\User Data\Default\Login Data" (also
-    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite"
-    rule(r"\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b",
+    # Cookies, Web Data), Firefox "logins.json", "key4.db", "cookies.sqlite".
+    # ^(?!.*\b(del|...)\b) = "the line has none of these delete words": a cleanup script deleting
+    # cookies does not steal them.
+    rule(r"^(?!.*\b(del|erase|rd|rmdir|remove-item)\b)"
+         r".*(\\user data\\.*\b(login data|cookies|web data)\b|\b(logins\.json|key4\.db|cookies\.sqlite)\b)",
          "reads a browser's saved passwords or cookies", "Credential Access",
          "T1555.003 Credentials from Web Browsers"),
     # Dumping LSASS memory with Windows' own comsvcs.dll: "rundll32 comsvcs.dll, MiniDump 624 d.dmp full"
@@ -624,7 +891,9 @@ DEFENDER_REGISTRY = re.compile(r"\\windows defender\\(exclusions\\|.*disable)", 
 # The registry keys of known UAC bypasses: a program that Windows starts with admin rights
 # without asking (fodhelper.exe, eventvwr.exe) reads its "open" command from the user's own
 # registry, so writing that key gives admin rights silently. No legitimate use: Strong.
-UAC_BYPASS_KEY = re.compile(r"\\software\\classes\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
+# Matched anywhere in the key, so both "HKU\<SID>\Software\Classes\ms-settings\..." and the
+# "HKU\<SID>_Classes\ms-settings\..." form that Sysmon also writes are caught (ATT&CK T1548.002).
+UAC_BYPASS_KEY = re.compile(r"\\(ms-settings|mscfile)\\shell\\open\\command", re.IGNORECASE)
 
 
 def check_credential_theft(events, context):
@@ -702,6 +971,12 @@ ALL_CHECKS = [
     check_ransom_note,
     check_run_from_user_folder,
     check_network_from_user_folder,
+    check_script_host_online,
+    check_remote_access_tool,
+    check_web_shell,
+    check_archive,
+    check_copy_to_other_drive,
+    check_cloud_upload,
     check_remote_execution,
     check_access_change,
     check_scheduled_task,
@@ -714,17 +989,102 @@ ALL_CHECKS = [
 ]
 
 
-def run_checks(events):
-    """Run every check and return all findings, oldest first."""
+# ---------- the dual-use gate ----------
+# Some Strong behaviours also have a common legitimate version: recon by an admin or monitoring
+# (RMM) tool, a security product reading LSASS, a lookalike-looking domain, an install script that
+# downloads and runs code, a new service. On its own such a finding is Low. It stays High when:
+#   1. the program itself or the program that started it runs from a user folder: admin and RMM
+#      tools are installed in Program Files. The program that WROTE its file counts here only
+#      when the analyst says IT installs all software (a sidebar switch): where users install
+#      their own software, a setup program in Downloads is how normal tools arrive; or
+#   2. that chain program is a proxy host (rundll32, regsvr32, mshta: ATT&CK T1218, "System
+#      Binary Proxy Execution"), which admins do not use to run commands; or
+#   3. a High finding that is NOT dual-use shares a program with its chain (e.g. the same
+#      program also deleted backups); or
+#   4. a High finding of a DIFFERENT dual-use kind shares a program with its chain (e.g. recon
+#      plus download-and-run, or recon plus an LSASS read): two different steps of an attack
+#      in one chain are a coherent story, not one ambiguous action. (Two findings of the same
+#      kind, e.g. two recon bursts, do not count.)
+# Never dual-use (High on their own): disguised programs, ransom notes, stolen passwords,
+# logs/backups deleted, UAC bypass, a document starting a shell.
+DUAL_USE_CHECKS = {"recon_burst", "lookalike_domain", "suspicious_powershell", "lsass_access"}
+SERVICE_TITLE = "New service from a dropped file"   # the dual-use part of check_persistence
+PROXY_HOSTS = {"rundll32.exe", "regsvr32.exe", "mshta.exe"}
+
+
+def is_dual_use(finding):
+    return finding["check"] in DUAL_USE_CHECKS or finding["title"] == SERVICE_TITLE
+
+
+def kind_of(finding):
+    """What kind of action a finding is: its check, or its title for the two kinds of persistence."""
+    return finding["title"] if finding["check"] == "persistence" else finding["check"]
+
+
+def chain_of(finding, context):
+    """ProcessGuid -> program path for the finding's program, the program that started it and
+    the program that created its file (when they are in the log)."""
+    chain = {finding["process_guid"]: finding["process"]}
+    started = context["processes"].get(finding["process_guid"])
+    if started:
+        chain[started.get("ParentProcessGuid", "")] = started.get("ParentImage", "")
+    creator = context["file_creators"].get(finding["process"].lower(), "")
+    if creator in context["processes"]:
+        chain[creator] = context["processes"][creator].get("Image", "")
+    chain.pop("", None)
+    return chain
+
+
+def apply_dual_use_gate(findings, context):
+    """Turn a dual-use Strong finding into Weak when nothing backs it up (rules 1-3 above)."""
+    to_lower = []
+    for f in findings:
+        if f["strength"] != "Strong" or not is_dual_use(f):
+            continue
+        chain = chain_of(f, context)
+        # The running programs: the finding's own program and the program that started it.
+        started = context["processes"].get(f["process_guid"], {})
+        programs = [f["process"], started.get("ParentImage", "")]
+        if context["it_installs_all"]:
+            programs += list(chain.values())  # also the program that wrote its file
+        if any(in_user_folder(p) or file_name(p) in PROXY_HOSTS for p in programs):
+            continue  # rules 1 and 2
+        backed = False
+        for other in findings:
+            if other is f or other["strength"] != "Strong":
+                continue
+            if not set(chain) & set(chain_of(other, context)):
+                continue  # not in the same process chain
+            if not is_dual_use(other):
+                backed = True  # rule 3
+            elif kind_of(other) != kind_of(f):
+                backed = True  # rule 4
+        if not backed:
+            to_lower.append(f)
+    # Changed only after all were decided, so the order of the findings does not matter.
+    for f in to_lower:
+        f["strength"] = "Weak"
+        f["detail"] += " (dual-use: no other high-confidence sign on this program)"
+
+
+def run_checks(events, it_installs_all=False):
+    """Run every check and return all findings, oldest first.
+    it_installs_all: True when IT installs all software on this client (users never do), so a
+    program installed from a user folder is itself a warning sign (see the dual-use gate)."""
     context = {
+        "it_installs_all": it_installs_all,
         # ProcessGuid -> its process-creation event, to look up parents.
         "processes": {e["ProcessGuid"]: e for e in events_of(events, 1) if e.get("ProcessGuid")},
         # Every file created during the log (lowercase paths).
         "dropped_files": {e.get("TargetFilename", "").lower() for e in events_of(events, 11)},
+        # Created file (lowercase path) -> the ProcessGuid of the program that wrote it.
+        "file_creators": {e.get("TargetFilename", "").lower(): e.get("ProcessGuid", "")
+                          for e in events_of(events, 11)},
     }
     findings = []
     for check in ALL_CHECKS:
         findings.extend(check(events, context))
+    apply_dual_use_gate(findings, context)
     findings.sort(key=lambda f: f["time"])
     return findings
 

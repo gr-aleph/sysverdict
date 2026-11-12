@@ -16,6 +16,7 @@ How it is built:
   3. sort them by time and number them 1, 2, 3, ...
 """
 
+import html
 import re
 
 from triage.checks import BROWSERS, file_name, is_windows_program
@@ -64,6 +65,26 @@ def code_addresses(text):
     return ADDRESS.sub(wrap, text)
 
 
+# Characters that Markdown (and Streamlit's math) would turn into a link, an image, bold text,
+# a heading, code or a formula. Each is replaced by its HTML number (&#91; shows as "["), so the
+# browser shows the character but Markdown does not act on it. "$" starts a formula in Streamlit.
+MARKDOWN_CHARACTERS = {"[": "&#91;", "]": "&#93;", "(": "&#40;", ")": "&#41;", "!": "&#33;",
+                       "*": "&#42;", "_": "&#95;", "#": "&#35;", "`": "&#96;", "~": "&#126;",
+                       "|": "&#124;", "$": "&#36;"}
+
+
+def esc(text):
+    """Log text made safe for the page:
+    1. html.escape, so a crafted log cannot inject HTML;
+    2. Markdown characters replaced (one character at a time), so "[Click](https://x)" or
+       "![x](http://1.2.3.4/p)" is shown as text, never as a link or a loaded image;
+    3. URLs, domains and IPs wrapped in <code>, which is never a clickable link;
+    4. line breaks shown as <br>."""
+    text = html.escape(str(text), quote=False)
+    text = "".join(MARKDOWN_CHARACTERS.get(character, character) for character in text)
+    return code_addresses(text).replace("\n", "<br>")
+
+
 def display_name(path):
     """File name as written in the log (keeps its capitals): 'C:\\x\\FireEye.exe' -> 'FireEye.exe'."""
     return (path or "").replace("/", "\\").rsplit("\\", 1)[-1]
@@ -82,6 +103,12 @@ ATTACK_TAGS = {
     "run_from_user_folder": ("Execution", "T1204.002 User Execution: Malicious File"),
     "network_from_user_folder": ("Command and Control", "T1071.001 Web Protocols"),
     "dll_from_user_folder": ("Defense Evasion", "T1218.011 Rundll32"),
+    "script_host_online": ("Command and Control", "T1105 Ingress Tool Transfer"),
+    "remote_access_tool": ("Command and Control", "T1219 Remote Access Software"),
+    "web_shell": ("Persistence", "T1505.003 Web Shell"),
+    "archive": ("Collection", "T1560.001 Archive via Utility"),
+    "copy_to_other_drive": ("Exfiltration", "T1052.001 Exfiltration over USB"),
+    "cloud_upload": ("Exfiltration", "T1567.002 Exfiltration to Cloud Storage"),
     # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
     # these are only the defaults.
     "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
@@ -132,6 +159,15 @@ SENTENCES = {
     "scheduled_task": "{detail}. A task runs again later, so it can also keep malware running.",
     "tool_download": "{detail}. This Windows program is not a download tool, a known way to bring in malware.",
     "dll_from_user_folder": "{detail}: a DLL started from a folder any user can write to.",
+    "script_host_online": "{detail}: a script program talking to the internet itself, as download "
+                          "commands and remote-control malware do.",
+    "remote_access_tool": "{detail}. Help desks use these tools, and so do attackers who talk a user "
+                          "into installing one.",
+    "web_shell": "{detail}. A web or database server should never open a command prompt: this is how a "
+                 "web shell (an attacker's script on the website) runs commands.",
+    "archive": "{detail}. Packing files is how data is collected before it is taken out.",
+    "copy_to_other_drive": "{detail}: possibly a USB stick or network drive used to take data out.",
+    "cloud_upload": "{detail}: a service often used to upload stolen data.",
     "credential_theft": "{detail}. This steals saved passwords: treat every account used on this computer "
                         "as known to the attacker.",
     "evidence_removal": "{detail}. Attackers do this to hide what they did or to stop recovery.",
@@ -520,6 +556,19 @@ ACTIONS = {
                                       "SHA256 and check its reputation.")],
     "dll_from_user_folder": [("Investigate", "Collect the DLL listed under Findings and check its SHA256 "
                                              "and signature.")],
+    "script_host_online": [("Investigate", "Check what the script program downloaded or sent (see the "
+                                           "command under Findings) and the reputation of the IP.")],
+    "remote_access_tool": [("Investigate", "Ask the user and the help desk whether a support session was "
+                                           "planned (a ticket); if not, remove the tool and treat it as "
+                                           "an intrusion.")],
+    "web_shell": [("Contain", "Take the website offline or block outside access to it until it is cleaned."),
+                  ("Eradicate", "Find and delete the web shell file in the website folder (compare it with "
+                                "a clean copy), and patch the hole it came in through.")],
+    "archive": [("Investigate", "Find the archive named under Findings: what was packed, and where did it go?")],
+    "copy_to_other_drive": [("Investigate", "Ask who copied the files to that drive and why; check the "
+                                            "company's rules on USB sticks.")],
+    "cloud_upload": [("Investigate", "Check the proxy or firewall logs for how much data was uploaded to "
+                                     "the service named under Findings.")],
     "credential_theft": [("Contain", "Reset the passwords of every account used on this computer, and "
                                      "sign them out of websites (stolen cookies stay valid until then)."),
                          ("Investigate", "Check where those accounts signed in after the theft.")],

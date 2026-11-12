@@ -14,8 +14,8 @@ def analysed(events):
 
 def test_domain_labels():
     labels = {r["domain"]: r["label"] for r in classify_domains(benign_events())}
-    assert labels["www.lazada.sg"] == "likely visited site"
-    assert labels["lzd-img-global.slatic.net"] == "likely ad, CDN or telemetry"
+    assert labels["www.example-shop.sg"] == "likely visited site"
+    assert labels["img-cdn.example.akamaized.net"] == "likely ad, CDN or telemetry"
     assert labels["cdn.example-shop.com"] == "likely page resource"   # 0.7 s after the previous lookup
     assert labels["www.wikipedia.org"] == "likely visited site"       # 90 s of quiet before it
     assert labels["wpad"] == "internal name"

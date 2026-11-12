@@ -22,10 +22,10 @@ from triage import enrich, graph, story
 from triage.checks import make_verdict, run_checks
 from triage.domains import classify_domains
 from triage.iocs import extract_iocs
-from triage.parse import read_evtx
+from triage.parse import read_evtx_with_status
 from triage.timeline import TIME_ZONES, group_by_day, in_zone
 
-TAGLINE = "Sysmon log triage for SOC teams"
+TAGLINE = "sysmon log triage for SOC analysts"
 CONFIDENCE = {"Strong": "High confidence", "Weak": "Low confidence"}
 # The NIST name, shown only where it differs from the phase label.
 PHASE_HELP = {"Investigate": "Detection & Analysis"}
@@ -39,6 +39,11 @@ st.markdown("""
   .block-container {padding-top: 2rem; max-width: 1400px;}
   .wordmark {font-weight: 700; letter-spacing: .14em; font-size: 1rem; color: #5CC8FF;}
   .wordmark span {color: #E6E1D6;}
+  /* The start page: a large title with a quieter grey tagline under it. */
+  /* clamp(smallest, preferred, largest): 3.2rem on a computer, smaller on a phone so the word never breaks. */
+  /* margin-top keeps it clear of Streamlit's top bar on a phone. */
+  .wordmark-big {font-size: clamp(1.8rem, 9vw, 3.2rem); line-height: 1.1; white-space: nowrap; margin-top: 1rem;}
+  .tagline {color: #8B96A3; font-size: 1.15rem; font-weight: 400; margin: .2rem 0 1.4rem 0;}
   .muted {color: #8B96A3; font-size: .85rem;}
   .verdict {border-radius: 8px; padding: 1.1rem 1.4rem; margin-bottom: 1rem; border-left: 8px solid;}
   .verdict .label {font-size: 2rem; font-weight: 700; letter-spacing: .08em;}
@@ -52,6 +57,7 @@ st.markdown("""
   .chip-tactic {background: #2A3440; color: #5CC8FF;}
   .card {background: #1A2129; border: 1px solid #2A3440; border-radius: 6px; padding: .8rem 1rem; margin-bottom: .6rem;}
   .card .title {font-weight: 600; font-size: 1.02rem;}
+  .card.start .title {color: #5CC8FF;}  /* the 1-2-3 cards on the start page */
   .day {font-weight: 700; color: #5CC8FF; letter-spacing: .05em; margin: .8rem 0 .3rem 0;}
   .clock {font-family: "IBM Plex Mono", monospace; color: #8B96A3; margin-right: .6rem;}
   .phase {font-weight: 700; margin-top: .6rem;} .phase span {color: #8B96A3; font-weight: 400; font-size: .8rem;}
@@ -102,10 +108,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def esc(text):
-    """Log text shown on the page: escape it so a crafted log cannot inject HTML, and show
-    URLs, domains and IPs as code text, which is never a clickable link."""
-    return story.code_addresses(html.escape(str(text), quote=False))
+esc = story.esc  # log text made safe for the page (see story.esc)
 
 
 def html_table(rows, short_columns=(), narrow_columns=()):
@@ -135,18 +138,18 @@ def html_table(rows, short_columns=(), narrow_columns=()):
 # ---------- loading and analysing (cached, so clicking around is instant) ----------
 
 @st.cache_data(show_spinner=False, max_entries=5)
-def analyse(file_bytes):
-    """Parse the log and run the checks. Cached by the file's content."""
+def analyse(file_bytes, it_installs_all):
+    """Parse the log and run the checks. Cached by the file's content and the IT setting."""
     # The evtx reader reads from a file on disk: write a temporary copy, read it, delete it.
     with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
         tmp.write(file_bytes)
         path = tmp.name
     try:
-        events = read_evtx(path)
+        events, damaged = read_evtx_with_status(path)
     finally:
         os.remove(path)
-    findings = run_checks(events)
-    return events, findings, extract_iocs(events, findings), story.build_steps(events, findings)
+    findings = run_checks(events, it_installs_all)
+    return events, findings, extract_iocs(events, findings), story.build_steps(events, findings), damaged
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -179,6 +182,11 @@ with st.sidebar:
     offline = st.toggle("Offline mode", value=True,
                         help="On: nothing leaves this computer. Off: hashes, public IPs and public "
                              "domains of flagged processes may be sent to the three local backends.")
+    it_installs_all = st.toggle("IT installs all software", value=False,
+                                help="Turn on for a client where users never install software themselves. "
+                                     "Then a program installed from Downloads or another user folder counts "
+                                     "as a warning sign, so admin-like actions by it (e.g. recon by a remote "
+                                     "tool) are high confidence. Off: they stay low confidence.")
     zone_label = st.selectbox("Time zone", list(TIME_ZONES),
                               help="Sysmon records UTC. Pick a zone to show local time instead.")
 
@@ -200,19 +208,15 @@ with st.sidebar:
 # ---------- empty state ----------
 
 if uploaded is None and sample is None:
-    st.markdown('<div class="wordmark" style="font-size:1.8rem">SYS<span>VERDICT</span></div>',
-                unsafe_allow_html=True)
-    st.markdown(f"### {TAGLINE}")
+    st.markdown('<div class="wordmark wordmark-big">SYS<span>VERDICT</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="tagline">{TAGLINE}</div>', unsafe_allow_html=True)
     left, middle, right = st.columns(3)
-    left.markdown('<div class="card"><div class="title">1. Upload</div>Export the Sysmon log '
-                  '(Event Viewer, or <code>wevtutil epl Microsoft-Windows-Sysmon/Operational '
-                  'host.evtx</code>) and drop it in the sidebar.</div>', unsafe_allow_html=True)
-    middle.markdown('<div class="card"><div class="title">2. Triage</div>Detection checks look for known '
-                    'attack behaviour. Every finding points to the exact events behind it.</div>',
+    left.markdown('<div class="card start"><div class="title">1. Upload</div>Sysmon logs only (.evtx). '
+                  'Other Windows event logs are not supported.</div>', unsafe_allow_html=True)
+    middle.markdown('<div class="card start"><div class="title">2. Analyze</div>Detects known attacker behavior.</div>',
                     unsafe_allow_html=True)
-    right.markdown('<div class="card"><div class="title">3. Act</div>Get a verdict, the attack story '
-                   'with MITRE ATT&amp;CK tags, next steps and IOCs for the ticket.</div>',
-                   unsafe_allow_html=True)
+    right.markdown('<div class="card start"><div class="title">3. Respond</div>An evidence-backed verdict with clear '
+                   'next steps and IOCs.</div>', unsafe_allow_html=True)
     st.stop()
 
 
@@ -225,11 +229,13 @@ else:
 file_id = hashlib.sha256(file_bytes).hexdigest()
 with st.spinner("Reading the log and running the checks..."):
     try:
-        events, findings, iocs, steps = analyse(file_bytes)
+        events, findings, iocs, steps, damaged = analyse(file_bytes, it_installs_all)
     except Exception:  # a broken or non-evtx file must not crash the page
         st.error("This file could not be read as a Windows event log (.evtx).")
         st.stop()
 
+if damaged:
+    st.warning(f"The file is damaged; {len(events)} events were read. The verdict covers only those events.")
 if not events:
     st.warning("No Sysmon events found in this file. Is it the Microsoft-Windows-Sysmon/Operational log?")
     st.stop()
@@ -317,8 +323,7 @@ with tabs[1]:
         st.success("None of the checks matched. Nothing known-bad is visible in this log.")
     attack = sorted(strong + attack_low, key=lambda f: f["time"]) if strong else []
     if attack:
-        st.subheader("Part of the attack")
-        st.caption("High-confidence findings, and low-confidence ones from the same malicious programs.")
+        st.caption("High- and low-confidence findings and related activity.")
         for number, f in enumerate(attack):
             finding_card(f, f"attack-{number}")
     if other_low:
@@ -349,7 +354,7 @@ with tabs[2]:
         intel = [i for i in iocs if i["type"] in INTEL_TYPES]
         other = [i for i in iocs if i["type"] not in INTEL_TYPES]
 
-        st.subheader("Checked against threat intel")
+        st.subheader("Enrichable IOCs")
         st.caption("Hashes, public IPv4 addresses and public domains of the flagged programs. Only these "
                    "can be sent to the enrichment backends; everything else stays on this computer.")
         if offline:
