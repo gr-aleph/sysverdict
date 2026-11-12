@@ -136,8 +136,8 @@ def test_unrelated_low_findings_are_kept_apart():
 
 def test_page_shows_real_addresses_as_code_text():
     text = "Edge saved FireEye.exe from https://www.fireeyee.com/a.exe, then called 167.172.71.11:80"
-    assert story.code_addresses(text) == ("Edge saved FireEye.exe from `https://www.fireeyee.com/a.exe`, "
-                                          "then called `167.172.71.11:80`")
+    assert story.code_addresses(text) == ("Edge saved FireEye.exe from <code>https://www.fireeyee.com/a.exe</code>, "
+                                          "then called <code>167.172.71.11:80</code>")
     assert story.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
 
 

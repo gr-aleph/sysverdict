@@ -51,14 +51,16 @@ ADDRESS = re.compile(f"{URL}|{DOMAIN_OR_IP.pattern}", re.IGNORECASE)
 
 
 def code_addresses(text):
-    """Wrap URLs, domains and IPs in `code` marks for the page: shown exactly as in the log,
-    but Streamlit never turns code text into a clickable link. File names are left alone."""
+    """Wrap URLs, domains and IPs in <code> tags for the page: shown exactly as in the log,
+    but never turned into a clickable link. File names are left alone.
+    HTML tags (not Markdown backticks) work both in Markdown text and inside HTML blocks
+    such as the Findings cards, where Markdown is not processed."""
     def wrap(match):
         token = match.group(0)
         is_url = token.lower().startswith("http")
         if not is_url and token.rsplit(".", 1)[-1].lower() in FILE_ENDINGS:
             return token
-        return f"`{token}`"
+        return f"<code>{token}</code>"
     return ADDRESS.sub(wrap, text)
 
 

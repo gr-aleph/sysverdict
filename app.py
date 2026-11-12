@@ -285,7 +285,8 @@ with tabs[0]:
         for phase, items in plan.items():
             note = f" <span>({PHASE_HELP[phase]})</span>" if phase in PHASE_HELP else ""
             st.markdown(f'<div class="phase">{phase}{note}</div>', unsafe_allow_html=True)
-            st.markdown("\n".join(f"- {esc(item)}" for item in items))
+            # unsafe_allow_html lets the <code> tags from esc() through; esc() already escaped the text.
+            st.markdown("\n".join(f"- {esc(item)}" for item in items), unsafe_allow_html=True)
 
 
 # ---------- Findings ----------
@@ -363,7 +364,7 @@ with tabs[2]:
             if notes:
                 with st.expander("What each source said"):
                     for value, note in notes:
-                        st.markdown(f"**{esc(value)}**: {esc(note)}")
+                        st.markdown(f"**{esc(value)}**: {esc(note)}", unsafe_allow_html=True)
 
         if other:
             st.subheader("Other IOCs")
