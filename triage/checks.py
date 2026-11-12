@@ -21,7 +21,7 @@ import ipaddress
 import re
 from pathlib import Path
 
-from triage.parse import to_datetime
+from triage.parse import hide_secrets, to_datetime
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
@@ -240,9 +240,11 @@ def decode_powershell(command):
     text = match.group(1)
     text += "=" * (-len(text) % 4)  # base64 length must be a multiple of 4
     try:
-        return base64.b64decode(text).decode("utf-16-le", errors="replace")
+        decoded = base64.b64decode(text).decode("utf-16-le", errors="replace")
     except ValueError:  # not real base64
         return ""
+    # The hidden command can contain a password too: hide it before it is checked or shown.
+    return hide_secrets(decoded)
 
 
 def check_suspicious_powershell(events, context):

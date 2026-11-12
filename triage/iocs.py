@@ -15,8 +15,9 @@ never leave the machine. This filter runs before any HTTP call.
 
 import ipaddress
 import re
+from urllib.parse import urlsplit
 
-from triage.checks import is_windows_program
+from triage.checks import TWO_PART_ENDINGS, is_windows_program
 
 # Regular expressions (patterns for finding text). Reading guide:
 #   ? = the character before is optional   + = one or more   [^...] = any character except these
@@ -57,15 +58,31 @@ def flagged_processes(findings):
 
 
 def organisation_suffixes(computer_names):
-    """The organisation's DNS suffix from each full computer name: 'pc01.contoso.com' -> 'contoso.com'.
-    A suffix needs at least one dot, so a name like 'pc01.com' never marks every .com domain internal."""
+    """The organisation's DNS suffix from each full computer name: 'pc01.contoso.com' -> 'contoso.com',
+    plus its parent domain: 'pc01.ad.contoso.com' -> 'ad.contoso.com' and 'contoso.com' (so
+    vpn.contoso.com stays private too). A suffix needs at least one dot, so a name like 'pc01.com'
+    never marks every .com domain internal."""
     suffixes = set()
     for computer in computer_names:
         if "." in computer:
             suffix = computer.split(".", 1)[1]
             if "." in suffix:
                 suffixes.add(suffix)
+                # The parent domain: the last 2 labels, or 3 for endings like co.uk.
+                labels = suffix.split(".")
+                keep = 3 if ".".join(labels[-2:]) in TWO_PART_ENDINGS else 2
+                if len(labels) > keep:
+                    suffixes.add(".".join(labels[-keep:]))
     return suffixes
+
+
+def url_host(url):
+    """The host of a web address, without a user name, password or port:
+    'https://bob:****@evil.example.com:8080/x' -> 'evil.example.com'. "" if there is none."""
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:  # a broken address, e.g. an unclosed [ of an IPv6 host
+        return ""
 
 
 def check_shareable(ioc_type, value, computer_names):
@@ -196,7 +213,9 @@ def extract_iocs(events, findings):
     # Every URL's host is also an IOC: an IP (http://1.2.3.4/a) or a domain.
     for ioc in list(iocs.values()):
         if ioc["type"] == "url":
-            host = ioc["value"].split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+            host = url_host(ioc["value"])
+            if not host:
+                continue
             try:
                 ipaddress.ip_address(host)
                 host_type = "ip"

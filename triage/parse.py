@@ -59,11 +59,33 @@ NET_USER_PASSWORD = re.compile(
     re.IGNORECASE)
 
 
+# 5. "net use \\server\share /user:admin Secret1": the password written AFTER the user name.
+#    .*? = anything up to the first /user: (or /u:); (?![/*]) = the next word is not an option.
+NET_USE_PASSWORD_AFTER_USER = re.compile(
+    r"(\bnet1?(?:\.exe)?\"?\s+use\b.*?\s/u(?:ser)?:\S+\s+)(?![/*])(\"[^\"]*\"|\S+)",
+    re.IGNORECASE)
+
+# 6. A password glued to -p, as 7-Zip and MySQL accept it: "7z x a.zip -pSecret1",
+#    "mysql -u root -pSecret1". Only for these programs: for other tools "-pXYZ" means something
+#    else. (?i:...) ignores case for the program name only; "-p" itself must be lowercase,
+#    because MySQL's "-P3306" (capital P) is a port number. (?=[^\s-]) = something follows at once.
+GLUED_PASSWORD = re.compile(
+    r"(\b(?i:7za?|mysql)(?i:\.exe)?\"?\s(?:.*\s)?-p)(?=[^\s\"-])(\S+)")
+
+# 7. A user name and password inside a web address: "https://bob:Secret1@host/x".
+#    (?=@) = "followed by @", so the @ and the host stay as they are.
+URL_PASSWORD = re.compile(r"(://[^\s/:@]+:)([^\s/@]+)(?=@)")
+
+# 8. "-u user:password", as curl writes it: "curl -u bob:Secret1 https://host".
+USER_COLON_PASSWORD = re.compile(r"((?:^|\s)-u\s+\"?[^\s:\"]+:)([^\s\"]+)")
+
+
 def hide_secrets(text):
     """Replace passwords in a command line or value by ****:
     'net use \\\\pc\\c$ Secret1 /user:admin' -> 'net use \\\\pc\\c$ **** /user:admin'.
     Limit: a password written as a plain word with no option name in front cannot be recognised."""
-    for pattern in (PASSWORD_OPTION, PASSWORD_SETTING, NET_USE_PASSWORD, NET_USER_PASSWORD):
+    for pattern in (PASSWORD_OPTION, PASSWORD_SETTING, NET_USE_PASSWORD, NET_USER_PASSWORD,
+                    NET_USE_PASSWORD_AFTER_USER, GLUED_PASSWORD, URL_PASSWORD, USER_COLON_PASSWORD):
         text = pattern.sub(lambda match: match.group(1) + HIDDEN, text)
     return text
 
