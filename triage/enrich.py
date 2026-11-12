@@ -13,6 +13,7 @@ Only IOCs with ioc["enrich"] == True (see iocs.py, the privacy filter) are ever 
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -35,6 +36,11 @@ WAIT_NOTES = {"sha256": "waiting: VirusTotal allows 4 hashes a minute, press Enr
               "ip": "waiting: at most 20 new IPs per run, press Enrich more to continue",
               "domain": "waiting: at most 20 new domains per run, press Enrich more to continue"}
 SOURCES = {"sha256": "hash backend", "ip": "IP backend", "domain": "DNS backend"}
+
+# How many lookups run at the same time. Each lookup mostly waits for a backend (and the backend
+# for the internet), so running a few side by side makes the total about as long as the slowest
+# one instead of all of them added up. 4 keeps the load on each backend small.
+MAX_AT_ONCE = 4
 
 # Results kept in memory while the app runs: (type, value) -> result. Errors are never kept.
 _cache = {}
@@ -158,21 +164,35 @@ def enrich_all(iocs, on_progress=None):
 
     At most MAX_NEW_PER_RUN new lookups of each type are sent per run (4 hashes, 20 IPs,
     20 domains; cached ones don't count). The rest are marked so the analyst can press
-    "Enrich more" later.
+    "Enrich more" later. Up to MAX_AT_ONCE lookups run at the same time; on_progress(number,
+    total, ioc) is called each time one is answered.
     """
     results = {}
     sent = {"sha256": 0, "ip": 0, "domain": 0}  # new lookups sent in this run, per type
     to_do = [i for i in iocs if i["type"] in ("sha256", "ip", "domain")]
-    for number, ioc in enumerate(to_do, start=1):
+
+    # 1. Decide, one by one as before, which IOCs are looked up now (the limits stay exact).
+    to_look_up = []
+    for ioc in to_do:
         key = (ioc["type"], ioc["value"])
-        if on_progress:
-            on_progress(number, len(to_do), ioc)
         if ioc["enrich"] and key not in _cache:
             if sent[ioc["type"]] >= MAX_NEW_PER_RUN[ioc["type"]]:
                 results[key] = not_enriched(WAIT_NOTES[ioc["type"]], SOURCES[ioc["type"]])
                 continue
             sent[ioc["type"]] += 1
-        results[key] = enrich_one(ioc)
+        to_look_up.append(ioc)  # also blocked and cached ones: enrich_one answers them at once
+
+    # 2. Look them up side by side. A "thread pool" is a small team of helpers (here at most
+    #    MAX_AT_ONCE) that each run enrich_one for one IOC; pool.submit hands out the work.
+    #    as_completed gives the lookups back in the order they finish, so the progress bar
+    #    moves as soon as any backend answers.
+    with ThreadPoolExecutor(max_workers=MAX_AT_ONCE) as pool:
+        running = {pool.submit(enrich_one, ioc): ioc for ioc in to_look_up}
+        for number, finished in enumerate(as_completed(running), start=1):
+            ioc = running[finished]
+            results[(ioc["type"], ioc["value"])] = finished.result()
+            if on_progress:
+                on_progress(number, len(running), ioc)
     return results
 
 

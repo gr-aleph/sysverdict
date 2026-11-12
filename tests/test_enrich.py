@@ -4,6 +4,8 @@ requests.get is replaced by a fake that returns a saved answer, raises a timeout
 the connection, so no test touches the network.
 """
 
+import time
+
 import pytest
 import requests
 
@@ -166,6 +168,26 @@ def test_at_most_twenty_new_ips_and_domains_per_run(monkeypatch):
     assert len(get.calls) == 40  # 20 IPs + 20 domains
     waiting = [r for r in results.values() if "press Enrich more" in r["note"]]
     assert len(waiting) == 4     # 2 IPs + 2 domains wait for the next run
+
+
+def test_lookups_run_side_by_side(monkeypatch):
+    # A slow backend: every answer takes 0.3 s. One after another, 4 lookups would take 1.2 s.
+    answer = fake_get({"/api/ip/": load_backend_answer("ip_ok.json")})
+
+    def slow_get(url, timeout):
+        time.sleep(0.3)
+        return answer(url, timeout)
+
+    monkeypatch.setattr(enrich.requests, "get", slow_get)
+    ips = [ioc("ip", f"8.8.{n}.1") for n in range(4)]
+    progress = []
+    start = time.perf_counter()
+    results = enrich.enrich_all(ips, lambda number, total, i: progress.append((number, total)))
+    assert time.perf_counter() - start < 0.9          # side by side: about 0.3 s
+    assert len(answer.calls) == 4
+    assert all(r["status"] == "enriched" for r in results.values())
+    assert set(results) == {("ip", f"8.8.{n}.1") for n in range(4)}
+    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]  # one step per answered lookup
 
 
 def test_errors_are_not_cached(monkeypatch):

@@ -137,7 +137,7 @@ def html_table(rows, short_columns=(), narrow_columns=()):
 @st.cache_data(show_spinner=False, max_entries=5)
 def analyse(file_bytes):
     """Parse the log and run the checks. Cached by the file's content."""
-    # python-evtx reads from a file on disk: write a temporary copy, read it, delete it.
+    # The evtx reader reads from a file on disk: write a temporary copy, read it, delete it.
     with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
         tmp.write(file_bytes)
         path = tmp.name
@@ -362,7 +362,8 @@ with tabs[2]:
                 progress = st.progress(0.0, text="Asking the backends...")
 
                 def on_progress(number, total, ioc):
-                    progress.progress(number / total, text=f"{number}/{total}: {ioc['type']} {ioc['value'][:60]}")
+                    # Called each time a lookup is answered (up to 4 run at the same time).
+                    progress.progress(number / total, text=f"{number}/{total} answered: {ioc['type']} {ioc['value'][:60]}")
 
                 enrichment.update(enrich.enrich_all(iocs, on_progress))
                 progress.empty()

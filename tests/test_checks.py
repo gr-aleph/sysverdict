@@ -120,29 +120,15 @@ def test_one_damaged_record_does_not_stop_the_file(monkeypatch):
                 '<Data Name="UtcTime">2026-01-05 09:00:0{n}.000</Data><Data Name="Image">C:\\a.exe</Data>'
                 '</EventData></Event>')
 
-    class Record:
-        def __init__(self, n):
-            self.n = n
-
-        def xml(self):
-            if self.n == 2:
-                raise ValueError("python-evtx could not decode this record")
-            return good_xml.format(n=self.n)
-
-    class FakeEvtx:  # stands in for Evtx.Evtx.Evtx: a "with" block that lists records
+    class FakeParser:  # stands in for evtx.PyEvtxParser: records() gives dicts with the XML in "data"
         def __init__(self, path):
             pass
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
         def records(self):
-            return [Record(1), Record(2), Record(3)]
+            damaged = "<Event><System>half a record"  # XML that cannot be read
+            return [{"data": good_xml.format(n=1)}, {"data": damaged}, {"data": good_xml.format(n=3)}]
 
-    monkeypatch.setattr(parse.evtx, "Evtx", FakeEvtx)
+    monkeypatch.setattr(parse, "PyEvtxParser", FakeParser)
     assert [e["record_id"] for e in parse.read_evtx("any.evtx")] == [1, 3]
 
 
