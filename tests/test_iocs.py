@@ -58,3 +58,18 @@ def test_check_shareable_rules():
     assert check_shareable("domain", "lab-pc01.example.com", computers) != ""
     assert check_shareable("sha256", "a" * 64, computers) == ""
     assert check_shareable("file", "c:\\users\\analyst\\a.exe", computers) != ""
+
+
+def test_organisation_domains_never_leave():
+    computers = {"pc01.contoso.com"}
+    assert check_shareable("domain", "fileserver.contoso.com", computers) == \
+        "internal domain of this organisation (stays on this machine)"
+    assert check_shareable("domain", "contoso.com", computers) != ""
+    assert check_shareable("domain", "evil.com", computers) == ""
+
+
+def test_computer_name_without_dot_blocks_nothing_extra():
+    computers = {"lab-pc01"}
+    assert check_shareable("domain", "fileserver.contoso.com", computers) == ""
+    # A name such as pc01.com must not mark every .com domain as internal.
+    assert check_shareable("domain", "evil.com", {"pc01.com"}) == ""

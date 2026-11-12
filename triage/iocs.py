@@ -56,6 +56,18 @@ def flagged_processes(findings):
     return guids, images
 
 
+def organisation_suffixes(computer_names):
+    """The organisation's DNS suffix from each full computer name: 'pc01.contoso.com' -> 'contoso.com'.
+    A suffix needs at least one dot, so a name like 'pc01.com' never marks every .com domain internal."""
+    suffixes = set()
+    for computer in computer_names:
+        if "." in computer:
+            suffix = computer.split(".", 1)[1]
+            if "." in suffix:
+                suffixes.add(suffix)
+    return suffixes
+
+
 def check_shareable(ioc_type, value, computer_names):
     """Return "" if this IOC may be sent for enrichment, else the reason it may not."""
     if ioc_type not in ENRICHABLE_TYPES:
@@ -84,6 +96,10 @@ def check_shareable(ioc_type, value, computer_names):
     for computer in computer_names:
         if value == computer or value.startswith(computer + "."):
             return "this computer's own name (stays on this machine)"
+    # The organisation's own domains (fileserver.contoso.com for computer pc01.contoso.com).
+    for suffix in organisation_suffixes(computer_names):
+        if value == suffix or value.endswith("." + suffix):
+            return "internal domain of this organisation (stays on this machine)"
     try:
         ipaddress.ip_address(value)
         return "an IP address, not a domain"
