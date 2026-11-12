@@ -362,7 +362,8 @@ with tabs[2]:
                 progress = st.progress(0.0, text="Asking the backends...")
 
                 def on_progress(number, total, ioc):
-                    progress.progress(number / total, text=f"{number}/{total}: {ioc['type']} {ioc['value'][:60]}")
+                    # Called each time a lookup is answered (up to 4 run at the same time).
+                    progress.progress(number / total, text=f"{number}/{total} answered: {ioc['type']} {ioc['value'][:60]}")
 
                 enrichment.update(enrich.enrich_all(iocs, on_progress))
                 progress.empty()
