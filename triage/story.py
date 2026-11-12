@@ -104,7 +104,7 @@ RECON_TECHNIQUES = {
 SENTENCES = {
     "document_app_spawns_program": "A document program started another program ({detail}). Documents "
                                    "should not start programs: this is how a malicious document runs its payload.",
-    "suspicious_powershell": "PowerShell ran encoded commands, downloaded code or ran text as code.",
+    "suspicious_powershell": "PowerShell downloaded code, ran text as code or decoded hidden code ({detail}).",
     "lsass_access": "{detail}. LSASS holds Windows passwords, so this is a sign of credential theft.",
     "recon_burst": "{detail}: discovery commands that malware runs to learn who the user is and what "
                    "the network looks like.",
@@ -481,7 +481,8 @@ ACTIONS = {
     "masquerading": [("Investigate", "Collect the disguised file for analysis and search other computers "
                                      "for its SHA256."),
                      ("Eradicate", "Delete the disguised file and all its copies.")],
-    "suspicious_powershell": [("Investigate", "Decode the PowerShell command to see what it downloaded or ran.")],
+    "suspicious_powershell": [("Investigate", "Check what the PowerShell command downloaded (see the decoded "
+                                              "command under Findings) and whether it ran.")],
     "lookalike_domain": [("Contain", "Block the lookalike domain at the DNS filter or web proxy."),
                          ("Investigate", "Search DNS and proxy logs for other computers that visited it.")],
     "network_from_user_folder": [("Contain", "Block the attacker IPs listed under IOCs at the firewall.")],

