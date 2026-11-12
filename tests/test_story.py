@@ -6,7 +6,8 @@ from triage.checks import make_verdict, run_checks
 
 # The MITRE ATT&CK tactics the story may use.
 TACTICS = ["Initial Access", "Execution", "Persistence", "Privilege Escalation", "Defense Evasion",
-           "Credential Access", "Discovery", "Lateral Movement", "Command and Control", "Impact"]
+           "Credential Access", "Discovery", "Lateral Movement", "Collection", "Command and Control",
+           "Exfiltration", "Impact"]
 
 
 def steps_of(events):

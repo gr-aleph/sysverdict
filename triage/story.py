@@ -105,6 +105,10 @@ ATTACK_TAGS = {
     "dll_from_user_folder": ("Defense Evasion", "T1218.011 Rundll32"),
     "script_host_online": ("Command and Control", "T1105 Ingress Tool Transfer"),
     "remote_access_tool": ("Command and Control", "T1219 Remote Access Software"),
+    "web_shell": ("Persistence", "T1505.003 Web Shell"),
+    "archive": ("Collection", "T1560.001 Archive via Utility"),
+    "copy_to_other_drive": ("Exfiltration", "T1052.001 Exfiltration over USB"),
+    "cloud_upload": ("Exfiltration", "T1567.002 Exfiltration to Cloud Storage"),
     # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
     # these are only the defaults.
     "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
@@ -159,6 +163,11 @@ SENTENCES = {
                           "commands and remote-control malware do.",
     "remote_access_tool": "{detail}. Help desks use these tools, and so do attackers who talk a user "
                           "into installing one.",
+    "web_shell": "{detail}. A web or database server should never open a command prompt: this is how a "
+                 "web shell (an attacker's script on the website) runs commands.",
+    "archive": "{detail}. Packing files is how data is collected before it is taken out.",
+    "copy_to_other_drive": "{detail}: possibly a USB stick or network drive used to take data out.",
+    "cloud_upload": "{detail}: a service often used to upload stolen data.",
     "credential_theft": "{detail}. This steals saved passwords: treat every account used on this computer "
                         "as known to the attacker.",
     "evidence_removal": "{detail}. Attackers do this to hide what they did or to stop recovery.",
@@ -552,6 +561,14 @@ ACTIONS = {
     "remote_access_tool": [("Investigate", "Ask the user and the help desk whether a support session was "
                                            "planned (a ticket); if not, remove the tool and treat it as "
                                            "an intrusion.")],
+    "web_shell": [("Contain", "Take the website offline or block outside access to it until it is cleaned."),
+                  ("Eradicate", "Find and delete the web shell file in the website folder (compare it with "
+                                "a clean copy), and patch the hole it came in through.")],
+    "archive": [("Investigate", "Find the archive named under Findings: what was packed, and where did it go?")],
+    "copy_to_other_drive": [("Investigate", "Ask who copied the files to that drive and why; check the "
+                                            "company's rules on USB sticks.")],
+    "cloud_upload": [("Investigate", "Check the proxy or firewall logs for how much data was uploaded to "
+                                     "the service named under Findings.")],
     "credential_theft": [("Contain", "Reset the passwords of every account used on this computer, and "
                                      "sign them out of websites (stolen cookies stay valid until then)."),
                          ("Investigate", "Check where those accounts signed in after the theft.")],

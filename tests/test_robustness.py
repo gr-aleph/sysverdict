@@ -422,6 +422,64 @@ def test_any_new_service_outside_windows_is_low():
         assert "persistence" not in checks_fired(service_set(windows))
 
 
+# ---------- web shell and data theft ----------
+
+W3WP = SYS + "inetsrv\\w3wp.exe"
+
+
+def test_web_server_starting_a_shell_is_strong_and_backs_up_its_recon():
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{w3}", Image=W3WP),
+              event(2, 1, "2026-02-01 09:00:01.000", ProcessGuid="{c}", ParentProcessGuid="{w3}",
+                    Image=SYS + "cmd.exe", ParentImage=W3WP, CommandLine="cmd /c whoami & ipconfig"),
+              event(3, 1, "2026-02-01 09:00:01.100", ProcessGuid="{w}", ParentProcessGuid="{c}",
+                    Image=SYS + "whoami.exe", ParentImage=SYS + "cmd.exe"),
+              event(4, 1, "2026-02-01 09:00:01.200", ProcessGuid="{i}", ParentProcessGuid="{c}",
+                    Image=SYS + "ipconfig.exe", ParentImage=SYS + "cmd.exe")]
+    assert strengths(events, "web_shell") == ["Strong"]
+    assert strengths(events, "recon_burst") == ["Strong"]          # backed up by the web shell
+    # A web server starting its own helper (not a shell) is normal.
+    helper = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{h}", Image="C:\\php\\php-cgi.exe",
+                    ParentImage=W3WP)]
+    assert "web_shell" not in checks_fired(helper)
+
+
+def archive_run(command):
+    return [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{z}", Image="C:\\Program Files\\7-Zip\\7z.exe",
+                  CommandLine=command)]
+
+
+def test_archive_is_low_and_a_disguised_archive_is_strong():
+    assert strengths(archive_run('7z.exe a -pSecret1 "C:\\Users\\Public\\out.7z" C:\\docs'), "archive") == ["Weak"]
+    assert strengths(archive_run("7z a backup C:\\docs"), "archive") == ["Weak"]          # 7-Zip adds .7z
+    assert strengths(archive_run("tar -czf out.tgz docs"), "archive") == ["Weak"]
+    assert strengths(archive_run("7z a -tzip C:\\Users\\Public\\holiday.jpg C:\\docs"), "archive") == ["Strong"]
+    assert "archive" not in checks_fired(archive_run("7z x C:\\Downloads\\setup.zip"))   # unpacking
+    assert "archive" not in checks_fired(archive_run("tar -xf a.tar -C out"))
+
+
+def files_on(drive, count, ending=".docx"):
+    return [event(n, 11, "2026-02-01 09:%02d:%02d.000" % (n // 60, n % 60), ProcessGuid="{x}",
+                  Image="C:\\Windows\\explorer.exe", TargetFilename=f"{drive}:\\copy\\file{n}{ending}")
+            for n in range(1, count + 1)]
+
+
+def test_bulk_copy_or_archive_to_another_drive_is_low():
+    assert strengths(files_on("E", 20), "copy_to_other_drive") == ["Weak"]
+    assert "copy_to_other_drive" not in checks_fired(files_on("E", 19))      # a few files: normal
+    assert "copy_to_other_drive" not in checks_fired(files_on("C", 50))      # the system drive
+    assert strengths(files_on("F", 1, ending=".7z"), "copy_to_other_drive") == ["Weak"]
+
+
+def test_transfer_sites_and_upload_tools_are_low():
+    edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    lookups = [event(1, 22, "2026-02-01 09:00:00.000", Image=edge, QueryName="eu.gofile.io"),
+               event(2, 22, "2026-02-01 09:00:01.000", Image=edge, QueryName="www.dropbox.com")]
+    assert strengths(lookups, "cloud_upload") == ["Weak"]                   # gofile only
+    tool = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{r}", Image="C:\\Users\\Public\\rclone.exe",
+                  CommandLine="rclone copy C:\\docs remote:backup")]
+    assert strengths(tool, "cloud_upload") == ["Weak"]
+
+
 def test_a_normal_it_day_is_not_malicious():
     from tests.fixtures.events import it_day_events
     findings = run_checks(it_day_events())

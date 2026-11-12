@@ -33,6 +33,10 @@ RENAMES = [
     ("corp.local", "ad.example.lan"),
     ("Example RMM", "Other Remote Tool"),
     ("agent.exe", "rtagent.exe"),
+    ("inetsrv\\w3wp.exe", "Apache24\\bin\\httpd.exe"),   # another web server
+    ("7z.exe", "7za.exe"),                         # another archive program
+    ("E:\\", "G:\\"),                              # another removable drive
+    ("gofile.io", "wetransfer.com"),               # another transfer site
     ("{", "{z-"),                                  # every GUID changes
 ]
 
@@ -69,8 +73,36 @@ def rmm_recon_events():
     ]
 
 
+def web_shell_events():
+    """IIS runs cmd.exe, which runs whoami and ipconfig."""
+    sys32 = "C:\\Windows\\System32\\"
+    w3wp, cmd = sys32 + "inetsrv\\w3wp.exe", sys32 + "cmd.exe"
+    return [
+        event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{w3}", Image=w3wp),
+        event(2, 1, "2026-02-01 09:00:01.000", ProcessGuid="{c}", ParentProcessGuid="{w3}",
+              Image=cmd, ParentImage=w3wp, CommandLine="cmd /c whoami & ipconfig"),
+        event(3, 1, "2026-02-01 09:00:01.100", ProcessGuid="{w}", ParentProcessGuid="{c}",
+              Image=sys32 + "whoami.exe", ParentImage=cmd),
+        event(4, 1, "2026-02-01 09:00:01.200", ProcessGuid="{i}", ParentProcessGuid="{c}",
+              Image=sys32 + "ipconfig.exe", ParentImage=cmd),
+    ]
+
+
+def data_theft_events():
+    """A user packs documents, copies 25 files to drive E: and visits a transfer site."""
+    sevenzip = "C:\\Program Files\\7-Zip\\7z.exe"
+    edge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{z}", Image=sevenzip,
+                    CommandLine=f'"{sevenzip}" a C:\\Users\\analyst\\Documents\\q1.7z C:\\Users\\analyst\\Documents\\Q1'),
+              event(2, 22, "2026-02-01 09:20:00.000", ProcessGuid="{e}", Image=edge, QueryName="eu.gofile.io")]
+    for n in range(25):
+        events.append(event(10 + n, 11, "2026-02-01 09:10:%02d.000" % n, ProcessGuid="{x}",
+                            Image="C:\\Windows\\explorer.exe", TargetFilename=f"E:\\Q1\\report{n}.docx"))
+    return events
+
+
 SCENARIOS = {"attack": attack_events, "benign": benign_events, "it_day": it_day_events,
-             "rmm_recon": rmm_recon_events}
+             "rmm_recon": rmm_recon_events, "web_shell": web_shell_events, "data_theft": data_theft_events}
 
 
 def summary(events):
