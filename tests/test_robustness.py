@@ -71,6 +71,34 @@ def test_two_dual_use_findings_do_not_back_each_other_up():
     assert make_verdict(run_checks(events))["label"] == "Suspicious"
 
 
+def user_installed_rmm_recon():
+    """A user runs a remote-support setup from Downloads; it writes the agent into Program Files;
+    the agent (started by a service) runs whoami + ipconfig. Nothing else happens."""
+    setup = USER + "\\Downloads\\RemoteSupport.ClientSetup.exe"
+    return [event(1, 1, "2026-02-01 08:59:00.000", ProcessGuid="{setup}", Image=setup,
+                  ParentProcessGuid="{explorer}", ParentImage="C:\\Windows\\explorer.exe"),
+            event(2, 11, "2026-02-01 08:59:05.000", ProcessGuid="{setup}", Image=setup,
+                  TargetFilename=AGENT)] + recon_from(AGENT)[1:]   # the agent's own start is not needed
+
+
+def test_user_installed_rmm_recon_depends_on_the_it_setting():
+    # Off (default): users install their own software, so the Downloads setup is normal: Low.
+    findings = run_checks(user_installed_rmm_recon())
+    assert [f["strength"] for f in findings if f["check"] == "recon_burst"] == ["Weak"]
+    assert make_verdict(findings)["label"] == "Suspicious"
+    # On: IT installs all software here, so a user-installed agent is a warning sign: High.
+    findings = run_checks(user_installed_rmm_recon(), it_installs_all=True)
+    assert [f["strength"] for f in findings if f["check"] == "recon_burst"] == ["Strong"]
+    assert make_verdict(findings)["label"] == "Malicious"
+
+
+def test_it_setting_does_not_change_an_rmm_tool_installed_by_it():
+    # No setup program in a user folder: Low with the switch on or off.
+    for it_installs_all in (False, True):
+        findings = run_checks(recon_from(AGENT), it_installs_all=it_installs_all)
+        assert make_verdict(findings)["label"] == "Suspicious"
+
+
 def test_recon_by_a_downloaded_program_stays_malicious():
     events = recon_from(USER + "\\Downloads\\setup.exe")
     assert strengths(events, "recon_burst") == ["Strong"]

@@ -785,8 +785,10 @@ ALL_CHECKS = [
 # Some Strong behaviours also have a common legitimate version: recon by an admin or monitoring
 # (RMM) tool, a security product reading LSASS, a lookalike-looking domain, an install script that
 # downloads and runs code, a new service. On its own such a finding is Low. It stays High when:
-#   1. a program in its chain (itself, the program that started it, the one that wrote its file)
-#      runs from a user folder: admin and RMM tools are installed in Program Files; or
+#   1. the program itself or the program that started it runs from a user folder: admin and RMM
+#      tools are installed in Program Files. The program that WROTE its file counts here only
+#      when the analyst says IT installs all software (a sidebar switch): where users install
+#      their own software, a setup program in Downloads is how normal tools arrive; or
 #   2. that chain program is a proxy host (rundll32, regsvr32, mshta: ATT&CK T1218, "System
 #      Binary Proxy Execution"), which admins do not use to run commands; or
 #   3. a High finding that is NOT dual-use shares a program with its chain (e.g. the same
@@ -824,7 +826,11 @@ def apply_dual_use_gate(findings, context):
         if f["strength"] != "Strong" or not is_dual_use(f):
             continue
         chain = chain_of(f, context)
-        programs = list(chain.values()) + [f["process"]]
+        # The running programs: the finding's own program and the program that started it.
+        started = context["processes"].get(f["process_guid"], {})
+        programs = [f["process"], started.get("ParentImage", "")]
+        if context["it_installs_all"]:
+            programs += list(chain.values())  # also the program that wrote its file
         if any(in_user_folder(p) or file_name(p) in PROXY_HOSTS for p in programs):
             continue  # rules 1 and 2
         backed = any(other["strength"] == "Strong" and not is_dual_use(other)
@@ -837,9 +843,12 @@ def apply_dual_use_gate(findings, context):
         f["detail"] += " (dual-use: no other high-confidence sign on this program)"
 
 
-def run_checks(events):
-    """Run every check and return all findings, oldest first."""
+def run_checks(events, it_installs_all=False):
+    """Run every check and return all findings, oldest first.
+    it_installs_all: True when IT installs all software on this client (users never do), so a
+    program installed from a user folder is itself a warning sign (see the dual-use gate)."""
     context = {
+        "it_installs_all": it_installs_all,
         # ProcessGuid -> its process-creation event, to look up parents.
         "processes": {e["ProcessGuid"]: e for e in events_of(events, 1) if e.get("ProcessGuid")},
         # Every file created during the log (lowercase paths).

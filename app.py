@@ -132,8 +132,8 @@ def html_table(rows, short_columns=(), narrow_columns=()):
 # ---------- loading and analysing (cached, so clicking around is instant) ----------
 
 @st.cache_data(show_spinner=False, max_entries=5)
-def analyse(file_bytes):
-    """Parse the log and run the checks. Cached by the file's content."""
+def analyse(file_bytes, it_installs_all):
+    """Parse the log and run the checks. Cached by the file's content and the IT setting."""
     # The evtx reader reads from a file on disk: write a temporary copy, read it, delete it.
     with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
         tmp.write(file_bytes)
@@ -142,7 +142,7 @@ def analyse(file_bytes):
         events, damaged = read_evtx_with_status(path)
     finally:
         os.remove(path)
-    findings = run_checks(events)
+    findings = run_checks(events, it_installs_all)
     return events, findings, extract_iocs(events, findings), story.build_steps(events, findings), damaged
 
 
@@ -176,6 +176,11 @@ with st.sidebar:
     offline = st.toggle("Offline mode", value=True,
                         help="On: nothing leaves this computer. Off: hashes, public IPs and public "
                              "domains of flagged processes may be sent to the three local backends.")
+    it_installs_all = st.toggle("IT installs all software", value=False,
+                                help="Turn on for a client where users never install software themselves. "
+                                     "Then a program installed from Downloads or another user folder counts "
+                                     "as a warning sign, so admin-like actions by it (e.g. recon by a remote "
+                                     "tool) are high confidence. Off: they stay low confidence.")
     zone_label = st.selectbox("Time zone", list(TIME_ZONES),
                               help="Sysmon records UTC. Pick a zone to show local time instead.")
 
@@ -222,7 +227,7 @@ else:
 file_id = hashlib.sha256(file_bytes).hexdigest()
 with st.spinner("Reading the log and running the checks..."):
     try:
-        events, findings, iocs, steps, damaged = analyse(file_bytes)
+        events, findings, iocs, steps, damaged = analyse(file_bytes, it_installs_all)
     except Exception:  # a broken or non-evtx file must not crash the page
         st.error("This file could not be read as a Windows event log (.evtx).")
         st.stop()
