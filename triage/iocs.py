@@ -17,7 +17,7 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 
-from triage.checks import FILE_IN_TEXT, TWO_PART_ENDINGS, is_windows_program
+from triage.checks_common import FILE_IN_TEXT, TWO_PART_ENDINGS, is_windows_program
 
 # Regular expressions (patterns for finding text). Reading guide:
 #   ? = the character before is optional   + = one or more   [^...] = any character except these
@@ -33,7 +33,7 @@ INTERNAL_SUFFIXES = (".local", ".localdomain", ".lan", ".internal", ".corp", ".h
                      ".intranet", ".arpa", ".localhost", ".test", ".invalid")
 ENRICHABLE_TYPES = ("sha256", "ip", "domain")
 
-# FILE_IN_TEXT (a Windows path inside a command line) comes from checks.py.
+# FILE_IN_TEXT (a Windows path inside a command line) comes from checks_common.py.
 
 
 def flagged_processes(findings):

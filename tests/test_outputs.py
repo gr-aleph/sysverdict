@@ -1,7 +1,7 @@
 """Domains, process tree and timeline."""
 
 from tests.fixtures.events import attack_events, benign_events, event
-from triage import graph, story
+from triage import graph, story, story_timeline
 from triage.checks import run_checks
 from triage.domains import classify_domains
 from triage.timeline import TIME_ZONES, event_label, group_by_day
@@ -100,7 +100,7 @@ def test_sysmon_event_labels():
 def test_timeline_table_tells_the_story_in_a_column():
     events = attack_events()
     findings, steps = analysed(events)
-    rows = story.story_rows(events, steps)
+    rows = story_timeline.story_rows(events, steps)
     assert list(rows[0]) == ["Time (UTC)", "Sysmon Event ID", "MITRE ATT&CK", "Event", "Event #"]
     tags = [r["MITRE ATT&CK"] for r in rows]
     assert "Discovery · T1033 System Owner/User Discovery" in tags
@@ -115,13 +115,13 @@ def test_timeline_table_tells_the_story_in_a_column():
 
 
 def test_timeline_is_empty_without_an_incident():
-    assert story.story_rows(benign_events(), []) == []
+    assert story_timeline.story_rows(benign_events(), []) == []
 
 
 def test_timeline_in_local_time():
     events = attack_events()
     findings, steps = analysed(events)
-    rows = story.story_rows(events, steps, "Asia/Singapore")
+    rows = story_timeline.story_rows(events, steps, "Asia/Singapore")
     # The first incident event is Edge saving the installer at 09:59:50 UTC = 17:59:50 in Singapore.
     assert rows[0]["Local time"] == "2026-01-05 17:59:50" and "Time (UTC)" not in rows[0]
     assert rows[0]["Sysmon Event ID"] == "15 – FileCreateStreamHash"

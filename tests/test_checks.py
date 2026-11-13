@@ -3,7 +3,8 @@
 import base64
 
 from tests.fixtures.events import USER, attack_events, benign_events, event
-from triage.checks import edit_distance, make_verdict, run_checks
+from triage.checks import make_verdict, run_checks
+from triage.checks_c2 import edit_distance
 from triage import parse
 from triage.parse import event_from_xml
 

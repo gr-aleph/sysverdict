@@ -10,12 +10,15 @@ decision, not the full investigation: a verdict, the evidence for it, the attack
 ## Architecture
 
 ```
- Browser -> Streamlit app (app.py, 127.0.0.1)
-              triage/parse.py     .evtx -> event dicts
-              triage/checks.py    detection checks -> findings -> verdict
-              triage/story.py     delivery, attack steps, ATT&CK tags, NIST next steps
-              triage/iocs.py      IOCs of flagged programs + privacy filter
-              triage/graph.py     process tree
+ Browser -> Streamlit app (app.py page flow, 127.0.0.1; one ui_*.py per tab, static/style.css)
+              triage/parse.py         .evtx -> event dicts
+              triage/checks.py        runs every check -> findings -> verdict
+                checks_<tactic>.py    the checks, one file per ATT&CK tactic
+                checks_gate.py        dual-use gate; checks_rules.py, checks_common.py shared parts
+              triage/story.py         attack steps (story_delivery, story_text, story_timeline, story_next_steps)
+              triage/display.py       log text made safe for the page
+              triage/iocs.py          IOCs of flagged programs + privacy filter
+              triage/graph.py         process tree
               triage/timeline.py, domains.py
               triage/enrich.py ──HTTP──> hash / IP / DNS backends (127.0.0.1) ──> public threat-intel sources
 ```
