@@ -1,7 +1,5 @@
 """The Process tree, Timeline and Domains tabs."""
 
-import csv
-import io
 import json
 
 import streamlit as st
@@ -9,7 +7,7 @@ import streamlit as st
 from triage import graph, story_timeline
 from triage.domains import classify_domains
 from triage.timeline import in_zone
-from ui_common import h, html_table
+from ui_common import csv_bytes, h, html_table
 
 
 def show_process_tree(events, findings, steps, zone):
@@ -68,13 +66,9 @@ def show_timeline(events, steps, zone, time_note):
                short_columns=(list(rows[0])[0], "Event #"),
                narrow_columns=("Sysmon Event ID", "MITRE ATT&CK"))
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
     shown_ids = {r["Event #"] for r in rows}
     left, right, _ = st.columns([1, 2, 1])
-    left.download_button("Download CSV", buffer.getvalue(), "timeline.csv", "text/csv")
+    left.download_button("Download CSV", csv_bytes(rows), "timeline.csv", "text/csv")
     right.download_button("Download JSON (every Sysmon field)",
                           json.dumps([e for e in events if e["record_id"] in shown_ids], indent=1),
                           "events.json", "application/json")
