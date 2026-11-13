@@ -2,10 +2,16 @@
 
 import streamlit as st
 
-from triage import display, enrich
+from triage import enrich
 from ui_common import csv_bytes, esc, html_table
 
 INTEL_TYPES = ("sha256", "ip", "domain")
+
+# The columns of each IOC table and of the CSV, in the order shown. "Event #" is the event's record
+# number in the log, so the analyst can find it on the Timeline or in the raw events.
+ENRICHABLE_COLUMNS = ("IOC Type", "Value", "Event #", "Reputation", "Checked by")
+OTHER_COLUMNS = ("IOC Type", "Value", "Event #")
+CSV_COLUMNS = ("IOC Type", "Value", "Event #", "Reputation", "Note")
 
 
 def reputation(ioc, enrichment, offline):
@@ -18,6 +24,15 @@ def reputation(ioc, enrichment, offline):
     if not ioc["enrich"]:
         return f"not checked: {ioc['why_not']}", "", ""
     return "not checked: " + ("offline mode" if offline else "press Enrich IOCs"), "", ""
+
+
+def ioc_row(ioc, enrichment, offline, columns):
+    """One table row for an IOC: every value is worked out once, then only the given columns
+    are kept, in the given order."""
+    shown, source, note = reputation(ioc, enrichment, offline)
+    values = {"IOC Type": ioc["type"], "Value": ioc["value"], "Event #": ioc["event_id"],
+              "Reputation": shown, "Checked by": source, "Note": note}
+    return {name: values[name] for name in columns}
 
 
 def show_iocs(iocs, enrichment, offline, verdict):
@@ -47,10 +62,8 @@ def show_iocs(iocs, enrichment, offline, verdict):
             progress.empty()
             st.rerun()
     if intel:
-        html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
-                     "Reputation": reputation(i, enrichment, offline)[0],
-                     "Checked by": reputation(i, enrichment, offline)[1]} for i in intel],
-                   short_columns=("IOC Type",))
+        html_table([ioc_row(i, enrichment, offline, ENRICHABLE_COLUMNS) for i in intel],
+                   short_columns=("IOC Type", "Event #"))
         notes = [(i["value"], reputation(i, enrichment, offline)[2]) for i in intel
                  if reputation(i, enrichment, offline)[2]]
         if notes:
@@ -61,12 +74,10 @@ def show_iocs(iocs, enrichment, offline, verdict):
     if other:
         st.subheader("Other IOCs")
         st.caption("For hunting on other computers and in other tools; not sent anywhere.")
-        html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
-                     "Event #": i["event_id"]} for i in other], short_columns=("IOC Type", "Event #"))
+        html_table([ioc_row(i, enrichment, offline, OTHER_COLUMNS) for i in other],
+                   short_columns=("IOC Type", "Event #"))
 
-    rows = [{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
-             "Reputation": reputation(i, enrichment, offline)[0], "Note": reputation(i, enrichment, offline)[2],
-             "Event #": i["event_id"]} for i in iocs]
+    rows = [ioc_row(i, enrichment, offline, CSV_COLUMNS) for i in iocs]
     left, right = st.columns([1, 3])
     left.download_button("Download all IOCs (CSV)", csv_bytes(rows), "iocs.csv", "text/csv")
     with right.expander("Copy values (one per line)"):
