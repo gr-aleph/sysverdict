@@ -19,7 +19,7 @@ How it is built:
 import html
 import re
 
-from triage.checks import BROWSERS, file_name, is_windows_program
+from triage.checks_common import BROWSERS, file_name, is_windows_program
 from triage.iocs import FILE_IN_TEXT
 from triage.parse import to_datetime
 from triage.timeline import event_label, in_zone, time_column
@@ -109,7 +109,7 @@ ATTACK_TAGS = {
     "archive": ("Collection", "T1560.001 Archive via Utility"),
     "copy_to_other_drive": ("Exfiltration", "T1052.001 Exfiltration over USB"),
     "cloud_upload": ("Exfiltration", "T1567.002 Exfiltration to Cloud Storage"),
-    # The command-line checks below carry the exact tag of the rule that matched (see checks.py);
+    # The command-line checks below carry the exact tag of the rule that matched (see checks_rules.py);
     # these are only the defaults.
     "remote_execution": ("Lateral Movement", "T1021 Remote Services"),
     "access_change": ("Persistence", "T1098 Account Manipulation"),
@@ -455,7 +455,7 @@ def narrate(e, processes, process_images):
         return f"{program} created the file {target}."
     if event_id in (12, 13, 14):
         target, value = e.get("TargetObject", ""), e.get("Details", "")
-        # A Run or RunOnce registry key (same pattern as the persistence check in checks.py).
+        # A Run or RunOnce registry key (same pattern as the persistence check in checks_persistence.py).
         if re.search(r"\\currentversion\\run(once)?\\", target, re.IGNORECASE):
             return f"{program} added the Run key '{target.split(chr(92))[-1]}' so {value[:120]} starts at every logon."
         if target.lower().endswith("\\imagepath"):

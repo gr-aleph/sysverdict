@@ -9,7 +9,7 @@ Sysmon does not record which page asked for a domain, so these are guesses, alwa
   4. A lookup by a program that is not a browser -> "background (program)".
 """
 
-from triage.checks import BROWSERS, file_name, load_list
+from triage.checks_common import BROWSERS, file_name, load_list
 from triage.iocs import check_shareable
 from triage.parse import to_datetime
 
