@@ -133,3 +133,14 @@ def test_days_follow_the_chosen_zone():
     assert [day for day, _ in utc] == ["Day 1 · Mon 05 Jan 2026", "Day 2 · Tue 06 Jan 2026"]
     singapore = group_by_day(items, "Asia/Singapore")  # both are 6 Jan in Singapore
     assert len(singapore) == 1 and singapore[0][1][0][0] == "06:00:00"
+
+
+def test_csv_download_opens_correctly_in_excel():
+    # Excel only reads a CSV as UTF-8 when it starts with the UTF-8 mark (BOM, bytes EF BB BF);
+    # without it, "–" shows as "â€“" and "·" as "Â·".
+    from ui_common import csv_bytes
+    rows = [{"Sysmon Event ID": "1 – Process Create", "MITRE ATT&CK": "Discovery · T1033"}]
+    data = csv_bytes(rows)
+    assert data.startswith(b"\xef\xbb\xbf")
+    assert data.decode("utf-8-sig") == ("Sysmon Event ID,MITRE ATT&CK\r\n"
+                                        "1 – Process Create,Discovery · T1033\r\n")

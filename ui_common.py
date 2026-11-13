@@ -1,6 +1,8 @@
-"""Page helpers shared by the tabs: the CSS, plain HTML tables and the raw-event viewer."""
+"""Page helpers shared by the tabs: the CSS, plain HTML tables, CSV downloads and the raw-event viewer."""
 
+import csv
 import html
+import io
 from pathlib import Path
 
 import streamlit as st
@@ -43,6 +45,17 @@ def html_table(rows, short_columns=(), narrow_columns=()):
         body += f"<tr>{cells}</tr>"
     st.markdown(f'<div class="htable"><table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>',
                 unsafe_allow_html=True)
+
+
+def csv_bytes(rows):
+    """A list of row dicts as CSV file content for a download button.
+    "utf-8-sig" = UTF-8 with a 3-byte mark at the start that says "this is UTF-8". Without it, Excel
+    guesses an old Windows code page and shows the dash "–" as "â€“" and the dot "·" as "Â·"."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 def show_raw_events(event_ids, events_by_id, limit=5):

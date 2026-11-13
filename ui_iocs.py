@@ -1,12 +1,9 @@
 """The IOCs tab: enrichable IOCs (with the Enrich button), other IOCs, and the CSV / copy exports."""
 
-import csv
-import io
-
 import streamlit as st
 
 from triage import display, enrich
-from ui_common import esc, html_table
+from ui_common import csv_bytes, esc, html_table
 
 INTEL_TYPES = ("sha256", "ip", "domain")
 
@@ -70,11 +67,7 @@ def show_iocs(iocs, enrichment, offline, verdict):
     rows = [{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
              "Reputation": reputation(i, enrichment, offline)[0], "Note": reputation(i, enrichment, offline)[2],
              "Event #": i["event_id"]} for i in iocs]
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
     left, right = st.columns([1, 3])
-    left.download_button("Download all IOCs (CSV)", buffer.getvalue(), "iocs.csv", "text/csv")
+    left.download_button("Download all IOCs (CSV)", csv_bytes(rows), "iocs.csv", "text/csv")
     with right.expander("Copy values (one per line)"):
         st.code("\n".join(i["value"] for i in iocs), language=None)
