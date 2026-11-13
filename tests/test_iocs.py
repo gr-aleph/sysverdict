@@ -73,3 +73,13 @@ def test_computer_name_without_dot_blocks_nothing_extra():
     assert check_shareable("domain", "fileserver.contoso.com", computers) == ""
     # A name such as pc01.com must not mark every .com domain as internal.
     assert check_shareable("domain", "evil.com", {"pc01.com"}) == ""
+
+
+def test_ioc_tables_show_the_event_number_third_and_no_process():
+    from ui_iocs import CSV_COLUMNS, ENRICHABLE_COLUMNS, OTHER_COLUMNS, ioc_row
+    hash_ioc = next(i for i in attack_iocs() if i["type"] == "sha256")
+    row = ioc_row(hash_ioc, {}, True, ENRICHABLE_COLUMNS)   # offline, nothing enriched yet
+    assert list(row) == ["IOC Type", "Value", "Event #", "Reputation", "Checked by"]
+    assert row["Event #"] == hash_ioc["event_id"] and row["Reputation"] == "not checked: offline mode"
+    assert list(ioc_row(hash_ioc, {}, True, OTHER_COLUMNS)) == ["IOC Type", "Value", "Event #"]
+    assert list(ioc_row(hash_ioc, {}, True, CSV_COLUMNS)) == ["IOC Type", "Value", "Event #", "Reputation", "Note"]
