@@ -18,7 +18,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from triage import enrich, graph, story
+from triage import display, enrich, graph, story, story_next_steps, story_timeline
 from triage.checks import make_verdict, run_checks
 from triage.domains import classify_domains
 from triage.iocs import extract_iocs
@@ -108,7 +108,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-esc = story.esc  # log text made safe for the page (see story.esc)
+esc = display.esc  # log text made safe for the page (see display.esc)
 
 
 def html_table(rows, short_columns=(), narrow_columns=()):
@@ -245,7 +245,7 @@ enrichment = st.session_state.setdefault("enrichment", {}).setdefault(file_id, {
 enrichment_words = [enrich.simple_verdict(r) for r in enrichment.values() if r["status"] == "enriched"]
 verdict = make_verdict(findings, enrichment_words)
 moments = story.key_moments(steps)
-plan = story.next_steps(findings, verdict, steps)
+plan = story_next_steps.next_steps(findings, verdict, steps)
 attack_low, other_low = story.split_low_findings(events, findings)
 zone = TIME_ZONES[zone_label]
 time_note = "Times in UTC" if zone is None else f"Times in {zone_label} local time"
@@ -312,7 +312,7 @@ def finding_card(f, key):
     st.markdown(f'<div class="card"><span class="chip chip-{f["strength"]}">{CONFIDENCE[f["strength"]].upper()}</span>'
                 f'<span class="title">{esc(f["title"])}</span><br>'
                 f'<span class="muted">{in_zone(f["time"], zone):%Y-%m-%d %H:%M:%S} | '
-                f'{esc(story.display_name(f["process"]))}</span><br>{esc(f["detail"])}</div>',
+                f'{esc(display.display_name(f["process"]))}</span><br>{esc(f["detail"])}</div>',
                 unsafe_allow_html=True)
     with st.expander(f"Raw events ({len(f['event_ids'])})", key=key):
         show_raw_events(f["event_ids"])
@@ -374,7 +374,7 @@ with tabs[2]:
                 progress.empty()
                 st.rerun()
         if intel:
-            html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": story.display_name(i["process"]),
+            html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
                          "Reputation": reputation(i)[0], "Checked by": reputation(i)[1]} for i in intel],
                        short_columns=("IOC Type",))
             notes = [(i["value"], reputation(i)[2]) for i in intel if reputation(i)[2]]
@@ -386,10 +386,10 @@ with tabs[2]:
         if other:
             st.subheader("Other IOCs")
             st.caption("For hunting on other computers and in other tools; not sent anywhere.")
-            html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": story.display_name(i["process"]),
+            html_table([{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
                          "Event #": i["event_id"]} for i in other], short_columns=("IOC Type", "Event #"))
 
-        rows = [{"IOC Type": i["type"], "Value": i["value"], "Process": story.display_name(i["process"]),
+        rows = [{"IOC Type": i["type"], "Value": i["value"], "Process": display.display_name(i["process"]),
                  "Reputation": reputation(i)[0], "Note": reputation(i)[2], "Event #": i["event_id"]} for i in iocs]
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
@@ -456,7 +456,7 @@ def stack_timeline_row(row):
 
 with tabs[4]:
     # Only the events that lead to the incident (the events behind the attack story).
-    rows = story.story_rows(events, steps, zone)
+    rows = story_timeline.story_rows(events, steps, zone)
     if not rows:
         st.info("No incident events to show.")
     else:

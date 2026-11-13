@@ -327,7 +327,7 @@ def test_a_reader_error_keeps_the_events_read_so_far(monkeypatch):
 
 
 def test_esc_shows_markdown_links_and_images_as_text():
-    from triage.story import esc
+    from triage.display import esc
     link = esc("[Click](https://evil.example/x)")
     image = esc("![x](http://1.2.3.4/p)")
     for shown in (link, image):

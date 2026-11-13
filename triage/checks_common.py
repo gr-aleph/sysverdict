@@ -51,7 +51,7 @@ TWO_PART_ENDINGS = ("co.uk", "com.sg", "com.au", "co.jp")
 # Pieces: [a-z]:\\ = drive letter and backslash; [^\"]+? = the shortest run of characters
 # that are not quotes; \.[a-z0-9]{2,4} = a file ending of 2-4 characters; (?=[\"\s]|$) =
 # "followed by a quote, a space or the end", without including that character.
-# (Also used by iocs.py and story.py.)
+# (Also used by iocs.py and story_delivery.py.)
 FILE_IN_TEXT = re.compile(r"[a-z]:\\[^\"]+?\.[a-z0-9]{2,4}(?=[\"\s]|$)", re.IGNORECASE)
 
 

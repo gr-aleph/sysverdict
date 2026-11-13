@@ -4,7 +4,8 @@ like the process view of an EDR tool.
 build_process_tree() returns plain rows; app.py draws them as HTML (each row indented by its depth).
 """
 
-from triage.story import attack_processes, display_name
+from triage.display import display_name
+from triage.story_delivery import attack_processes
 from triage.timeline import in_zone
 
 MAX_TREE_LINES = 80  # a very long tree is cut here so the page stays fast

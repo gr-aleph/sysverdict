@@ -1,7 +1,7 @@
 """The attack story: how it got in, the numbered steps, ATT&CK tags and the NIST next steps."""
 
 from tests.fixtures.events import USER, attack_events, benign_events, event
-from triage import story
+from triage import display, story, story_next_steps, story_text
 from triage.checks import make_verdict, run_checks
 
 # The MITRE ATT&CK tactics the story may use.
@@ -141,18 +141,18 @@ def test_unrelated_low_findings_are_kept_apart():
 
 def test_page_shows_real_addresses_as_code_text():
     text = "Edge saved FireEye.exe from https://www.fireeyee.com/a.exe, then called 167.172.71.11:80"
-    assert story.code_addresses(text) == ("Edge saved FireEye.exe from <code>https://www.fireeyee.com/a.exe</code>, "
+    assert display.code_addresses(text) == ("Edge saved FireEye.exe from <code>https://www.fireeyee.com/a.exe</code>, "
                                           "then called <code>167.172.71.11:80</code>")
-    assert story.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
+    assert display.code_addresses("version 10.0.22621.1") == "version 10.0.22621.1"
 
 
 def test_every_check_has_a_tag_a_sentence_and_next_steps():
-    for check in story.ATTACK_TAGS:
-        assert story.ATTACK_TAGS[check][0] in TACTICS, check
-        assert check in story.SENTENCES, check
+    for check in story_text.ATTACK_TAGS:
+        assert story_text.ATTACK_TAGS[check][0] in TACTICS, check
+        assert check in story_text.SENTENCES, check
     from triage.checks import ALL_CHECKS
     for function in ALL_CHECKS:  # check_recon_burst -> "recon_burst"
-        assert function.__name__.removeprefix("check_") in story.ACTIONS, function.__name__
+        assert function.__name__.removeprefix("check_") in story_next_steps.ACTIONS, function.__name__
 
 
 def test_new_checks_become_story_steps():
@@ -179,7 +179,7 @@ def test_new_checks_become_story_steps():
                   "credential_theft", "evidence_removal", "uac_bypass"]:
         assert check in told, check
     assert all(s["tactic"] in TACTICS and s["technique"] for s in steps if s["kind"] == "finding")
-    plan = story.next_steps(findings, make_verdict(findings), steps)
+    plan = story_next_steps.next_steps(findings, make_verdict(findings), steps)
     assert any("Reset the passwords" in item for item in plan["Contain"])
     assert make_verdict(findings)["label"] == "Malicious"
 
@@ -187,8 +187,8 @@ def test_new_checks_become_story_steps():
 def test_next_steps_use_nist_phases():
     events = attack_events()
     findings = run_checks(events)
-    plan = story.next_steps(findings, make_verdict(findings), story.build_steps(events, findings))
-    assert list(plan) == [p for p in story.PHASES if p in plan]
+    plan = story_next_steps.next_steps(findings, make_verdict(findings), story.build_steps(events, findings))
+    assert list(plan) == [p for p in story_next_steps.PHASES if p in plan]
     assert {"Investigate", "Contain", "Eradicate", "Recover"} <= set(plan)
     assert any("www.fireeyee.com" in step for step in plan["Contain"])
 
@@ -199,12 +199,12 @@ def test_download_site_host_without_a_path():
                 "text": "The user downloaded a.exe with Edge from https://a.com, from the page https://b.com/."}]
     with_path = [{"kind": "origin", "technique": "",
                   "text": "The user downloaded a.exe with Edge from https://www.a.com/x/a.exe."}]
-    assert "Block the download site a.com at the web proxy." in story.next_steps([], malicious, no_path)["Contain"]
-    assert "Block the download site www.a.com at the web proxy." in story.next_steps([], malicious, with_path)["Contain"]
+    assert "Block the download site a.com at the web proxy." in story_next_steps.next_steps([], malicious, no_path)["Contain"]
+    assert "Block the download site www.a.com at the web proxy." in story_next_steps.next_steps([], malicious, with_path)["Contain"]
 
 
 def test_benign_next_steps_are_investigate_only():
-    plan = story.next_steps([], make_verdict([]))
+    plan = story_next_steps.next_steps([], make_verdict([]))
     assert list(plan) == ["Investigate"]
     assert plan["Investigate"][0].startswith("Nothing known-bad was found by the checks; "
                                              "this does not prove the computer is clean.")
