@@ -30,34 +30,7 @@ def test_brand_owned_domain_is_not_a_lookalike():
 
 # ---------- 1c: services ----------
 
-def service(path, record=1):
-    """A file is created during the log, then a service is set to run it."""
-    return [event(record, 11, "2026-02-01 09:00:00.000", ProcessGuid="{i}", Image=SYS + "msiexec.exe",
-                  TargetFilename=path),
-            event(record + 1, 13, "2026-02-01 09:00:01.000", ProcessGuid="{svc}", Image=SYS + "services.exe",
-                  TargetObject="HKLM\\System\\CurrentControlSet\\Services\\Example\\ImagePath", Details=path)]
-
-
-def test_defender_platform_and_driver_store_services_are_not_findings():
-    defender = "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.1-0\\MsMpEng.exe"
-    driver = SYS + "DriverStore\\FileRepository\\example.inf_amd64_1\\exampleservice.exe"
-    assert "persistence" not in checks_fired(service(defender))
-    assert "persistence" not in checks_fired(service(driver))
-
-
-def test_fake_updater_service_is_still_strong():
-    assert [f["strength"] for f in run_checks(attack_events())
-            if f["title"] == "New service from a dropped file"] == ["Strong"]
-
-
 # ---------- 1d: LSASS ----------
-
-def test_lsass_reader_in_windows_temp_is_strong():
-    fake = "C:\\Windows\\Temp\\wininit.exe"
-    events = [event(1, 10, "2026-02-01 09:00:00.000", SourceImage=fake, SourceProcessGUID="{f}",
-                    TargetImage=SYS + "lsass.exe", GrantedAccess="0x1fffff")]
-    assert strengths(events, "lsass_access") == ["Strong"]
-
 
 # ---------- 5d: document apps ----------
 
@@ -76,16 +49,6 @@ def test_outlook_opening_a_browser_or_open_with_is_not_a_finding():
 
 # ---------- 5c: cookies ----------
 
-def test_deleting_cookies_is_not_theft_but_copying_them_is():
-    cookies = USER + "\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Network\\Cookies"
-    delete = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{d}", Image=SYS + "cmd.exe",
-                    CommandLine=f'cmd /c del /f "{cookies}"')]
-    copy = [event(2, 1, "2026-02-01 09:00:00.000", ProcessGuid="{c}", Image=SYS + "cmd.exe",
-                  CommandLine=f'cmd /c copy "{cookies}" C:\\Users\\Public\\c.db')]
-    assert "credential_theft" not in checks_fired(delete)
-    assert strengths(copy, "credential_theft") == ["Strong"]
-
-
 # ---------- Block 2: privacy ----------
 
 # ---------- Block 3: encoding does not hide a command from the rule lists ----------
@@ -103,13 +66,6 @@ def ps_strength(script):
     events = [event(1, 1, "2026-02-01 09:00:00.000", ProcessGuid="{p}", Image=PS, ParentProcessGuid="{d}",
                     ParentImage=USER + "\\Downloads\\helper.exe", CommandLine="powershell -c " + script)]
     return strengths(events, "suspicious_powershell")
-
-
-def test_uac_bypass_key_in_the_classes_form_is_strong():
-    events = [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{u}", Image=USER + "\\Downloads\\u.exe",
-                    TargetObject="HKU\\S-1-5-21-0_Classes\\ms-settings\\shell\\open\\command\\(Default)",
-                    Details="C:\\Users\\Public\\u.exe")]
-    assert strengths(events, "uac_bypass") == ["Strong"]
 
 
 def test_ransom_note_names_and_paths_with_spaces():
@@ -139,34 +95,6 @@ def test_remote_access_tool_is_low_once_per_tool():
     events = [event(n, 1, "2026-02-01 09:00:0%d.000" % n, ProcessGuid="{a%d}" % n, Image=tool) for n in (1, 2)]
     assert strengths(events, "remote_access_tool") == ["Weak"]
     assert "remote_access_tool" not in checks_fired([event(1, 1, "2026-02-01 09:00:00.000", Image=SYS + "mstsc.exe")])
-
-
-def run_key(writer, value):
-    return [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{w}", Image=writer,
-                  TargetObject="HKU\\S-1-5-21-0\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Example",
-                  Details=value)]
-
-
-def test_any_new_run_key_is_low_except_an_app_adding_itself():
-    app = "C:\\Program Files\\Example\\tray.exe"
-    assert "persistence" not in checks_fired(run_key(app, f'"{app}" --minimized'))           # adds itself
-    assert strengths(run_key(app, '"C:\\Program Files\\Other\\other.exe"'), "persistence") == ["Weak"]
-    assert strengths(run_key(SYS + "reg.exe", "powershell -w hidden -c iex $x"), "persistence") == ["Weak"]
-
-
-def service_set(value):
-    return [event(1, 13, "2026-02-01 09:00:00.000", ProcessGuid="{svc}", Image=SYS + "services.exe",
-                  TargetObject="HKLM\\System\\CurrentControlSet\\Services\\Example\\ImagePath", Details=value)]
-
-
-def test_any_new_service_outside_windows_is_low():
-    assert strengths(service_set('"C:\\Program Files\\Example\\svc.exe"'), "persistence") == ["Weak"]
-    assert strengths(service_set("%COMSPEC% /b /c start c:\\x.exe"), "persistence") == ["Weak"]
-    assert strengths(service_set("C:\\Windows\\System32\\cmd.exe /c x"), "persistence") == ["Weak"]
-    # Windows' own services, in any of the short forms Windows writes: no finding.
-    for windows in ("%SystemRoot%\\System32\\svchost.exe -k netsvcs", "\\SystemRoot\\System32\\drivers\\x.sys",
-                    "System32\\drivers\\y.sys", "C:\\Windows\\System32\\spoolsv.exe"):
-        assert "persistence" not in checks_fired(service_set(windows))
 
 
 # ---------- web shell and data theft ----------

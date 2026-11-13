@@ -4,7 +4,7 @@ Every name here is made up (SRV-01, analyst, example domains)."""
 import base64
 
 from tests.fixtures.events import USER, event
-from tests.helpers import SYS, PS, strengths
+from tests.helpers import SYS, PS, command_findings, strengths
 from triage.checks import run_checks
 
 
@@ -89,13 +89,6 @@ def test_encoded_new_account_is_found_with_the_password_hidden():
 
 
 # ---------- rule lists for Windows tools ----------
-
-def command_findings(image, command):
-    """(check, strength) of every finding for one program run with this command line."""
-    events = [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{c}", Image=image, CommandLine=command,
-                    ParentImage="C:\\Windows\\System32\\cmd.exe")]
-    return [(f["check"], f["strength"]) for f in run_checks(events)]
-
 
 def test_remote_execution_is_weak():
     fires = [("C:\\Tools\\PsExec64.exe", '"C:\\Tools\\PsExec64.exe" \\\\SRV-01 -s cmd /c ipconfig'),
